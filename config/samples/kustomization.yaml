@@ -1,4 +1,6 @@
 ## Append samples of your project ##
 resources:
 - greatdb_v1_greatdbpaxos.yaml
+- greatdb_v1_greatdbbackuprecord.yaml
+- greatdb_v1_greatdbbackupschedule.yaml
 # +kubebuilder:scaffold:manifestskustomizesamples

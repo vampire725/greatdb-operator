@@ -17,4 +17,22 @@ resources:
   kind: GreatDBPaxos
   path: greatdb.com/greatdb-operator/api/v1
   version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: greatdb.com
+  group: greatdb
+  kind: GreatDBBackupRecord
+  path: greatdb.com/greatdb-operator/api/v1
+  version: v1
+- api:
+    crdVersion: v1
+    namespaced: true
+  controller: true
+  domain: greatdb.com
+  group: greatdb
+  kind: GreatDBBackupSchedule
+  path: greatdb.com/greatdb-operator/api/v1
+  version: v1
 version: "3"

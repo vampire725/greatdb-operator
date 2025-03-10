@@ -1,0 +1,9 @@
+apiVersion: greatdb.greatdb.com/v1
+kind: GreatDBBackupSchedule
+metadata:
+  labels:
+    app.kubernetes.io/name: greatdb-operator
+    app.kubernetes.io/managed-by: kustomize
+  name: greatdbbackupschedule-sample
+spec:
+  # TODO(user): Add fields here

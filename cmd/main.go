@@ -209,6 +209,20 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "GreatDBPaxos")
 		os.Exit(1)
 	}
+	if err = (&controller.GreatDBBackupRecordReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GreatDBBackupRecord")
+		os.Exit(1)
+	}
+	if err = (&controller.GreatDBBackupScheduleReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GreatDBBackupSchedule")
+		os.Exit(1)
+	}
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {

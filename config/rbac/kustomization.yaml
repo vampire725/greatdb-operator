@@ -22,6 +22,12 @@ resources:
 # default, aiding admins in cluster management. Those roles are
 # not used by the {{ .ProjectName }} itself. You can comment the following lines
 # if you do not want those helpers be installed with your Project.
+- greatdbbackupschedule_admin_role.yaml
+- greatdbbackupschedule_editor_role.yaml
+- greatdbbackupschedule_viewer_role.yaml
+- greatdbbackuprecord_admin_role.yaml
+- greatdbbackuprecord_editor_role.yaml
+- greatdbbackuprecord_viewer_role.yaml
 - greatdbpaxos_admin_role.yaml
 - greatdbpaxos_editor_role.yaml
 - greatdbpaxos_viewer_role.yaml

@@ -3,6 +3,8 @@
 # It should be run by config/default
 resources:
 - bases/greatdb.greatdb.com_greatdbpaxos.yaml
+- bases/greatdb.greatdb.com_greatdbbackuprecords.yaml
+- bases/greatdb.greatdb.com_greatdbbackupschedules.yaml
 # +kubebuilder:scaffold:crdkustomizeresource
 
 patches:
