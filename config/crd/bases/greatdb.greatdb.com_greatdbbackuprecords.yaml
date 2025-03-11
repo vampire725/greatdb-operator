@@ -8,17 +8,34 @@ metadata:
 spec:
   group: greatdb.greatdb.com
   names:
+    categories:
+    - all
     kind: GreatDBBackupRecord
     listKind: GreatDBBackupRecordList
     plural: greatdbbackuprecords
+    shortNames:
+    - gbr
     singular: greatdbbackuprecord
   scope: Namespaced
   versions:
-  - name: v1
+  - additionalPrinterColumns:
+    - jsonPath: .status.status
+      name: Status
+      type: string
+    - jsonPath: .status.backupType
+      name: TYPE
+      type: string
+    - jsonPath: .status.backupPath
+      name: PATH
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: AGE
+      type: date
+    name: v1
     schema:
       openAPIV3Schema:
-        description: GreatDBBackupRecord is the Schema for the greatdbbackuprecords
-          API.
+        description: GreatDBBackupRecord is the Schema for the GreatDBBackupRecord
+          API
         properties:
           apiVersion:
             description: |-
@@ -38,15 +55,94 @@ spec:
           metadata:
             type: object
           spec:
-            description: GreatDBBackupRecordSpec defines the desired state of GreatDBBackupRecord.
+            description: GreatDBClusterSpec defines the desired state of GreatDBCluster
             properties:
-              foo:
-                description: Foo is an example field of GreatDBBackupRecord. Edit
-                  greatdbbackuprecord_types.go to remove/update
+              backupResource:
+                description: Backup method
+                enum:
+                - greatdb
                 type: string
+              backupType:
+                description: Backup type
+                enum:
+                - full
+                - inc
+                type: string
+              clean:
+                description: Regular cleaning, default not to clean, configuration
+                  of this function must ensure that the storage has cleaning permissions,support
+                  units[h,d]
+                type: string
+              clusterName:
+                description: ClusterName is cluster name
+                type: string
+              instanceName:
+                description: Backup from a specified instance
+                type: string
+              selectStorage:
+                description: select storage spec
+                properties:
+                  s3:
+                    description: S3 storage
+                    properties:
+                      accessKey:
+                        type: string
+                      bucket:
+                        type: string
+                      endpointUrl:
+                        type: string
+                      secretKey:
+                        type: string
+                    required:
+                    - accessKey
+                    - bucket
+                    - endpointUrl
+                    - secretKey
+                    type: object
+                  type:
+                    description: The storage type used for backup. When selecting
+                      the NFS type, nfs must be specified for backup when creating
+                      the cluster, otherwise it cannot be backed up
+                    enum:
+                    - s3
+                    - nfs
+                    type: string
+                required:
+                - type
+                type: object
+            required:
+            - backupResource
+            - backupType
+            - clusterName
             type: object
           status:
-            description: GreatDBBackupRecordStatus defines the observed state of GreatDBBackupRecord.
+            description: GreatDBBackupRecordStatus defines the observed state of GreatDBBackupRecord
+            properties:
+              backupIncFromLsn:
+                type: string
+              backupPath:
+                items:
+                  type: string
+                type: array
+              backupType:
+                type: string
+              completed:
+                description: CompletedAt is CompletedAt.
+                format: date-time
+                type: string
+              fromLsn:
+                type: string
+              lastLsn:
+                type: string
+              message:
+                type: string
+              status:
+                description: |-
+                  Status is the status of the condition.
+                  Can be True, False, Unknown.
+                type: string
+              toLsn:
+                type: string
             type: object
         type: object
     served: true

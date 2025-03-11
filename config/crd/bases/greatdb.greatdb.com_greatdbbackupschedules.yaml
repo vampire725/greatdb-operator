@@ -8,17 +8,21 @@ metadata:
 spec:
   group: greatdb.greatdb.com
   names:
+    categories:
+    - all
     kind: GreatDBBackupSchedule
     listKind: GreatDBBackupScheduleList
     plural: greatdbbackupschedules
+    shortNames:
+    - gbs
     singular: greatdbbackupschedule
   scope: Namespaced
   versions:
   - name: v1
     schema:
       openAPIV3Schema:
-        description: GreatDBBackupSchedule is the Schema for the greatdbbackupschedules
-          API.
+        description: GreatDBBackupSchedule is the Schema for the GreatDBBackupSchedule
+          API
         properties:
           apiVersion:
             description: |-
@@ -38,16 +42,169 @@ spec:
           metadata:
             type: object
           spec:
-            description: GreatDBBackupScheduleSpec defines the desired state of GreatDBBackupSchedule.
+            description: GreatDBClusterSpec defines the desired state of GreatDBCluster
             properties:
-              foo:
-                description: Foo is an example field of GreatDBBackupSchedule. Edit
-                  greatdbbackupschedule_types.go to remove/update
+              clusterName:
+                description: |-
+                  ClusterName is cluster name
+                  Backup will only occur when the cluster is available
                 type: string
+              instanceName:
+                description: Backup from a specified instance. By default, select
+                  the primary SECONDARY node. If there is no SECONDARY node, select
+                  the primary node for backup
+                type: string
+              schedulers:
+                description: Scheduler is list of backup scheduler.
+                items:
+                  properties:
+                    backupResource:
+                      description: Backup method
+                      enum:
+                      - greatdb
+                      type: string
+                    backupType:
+                      description: Backup type
+                      enum:
+                      - full
+                      - inc
+                      type: string
+                    clean:
+                      description: Regular cleaning, default not to clean, configuration
+                        of this function must ensure that the storage has cleaning
+                        permissions,support units[h,d]
+                      type: string
+                    name:
+                      description: Name used by the component
+                      type: string
+                    schedule:
+                      description: |-
+                        The schedule in Cron format, see https://en.wikipedia.org/wiki/Cron.
+                        If left blank, initiate an immediate backup
+                      type: string
+                    selectStorage:
+                      description: select storage spec
+                      properties:
+                        s3:
+                          description: S3 storage
+                          properties:
+                            accessKey:
+                              type: string
+                            bucket:
+                              type: string
+                            endpointUrl:
+                              type: string
+                            secretKey:
+                              type: string
+                          required:
+                          - accessKey
+                          - bucket
+                          - endpointUrl
+                          - secretKey
+                          type: object
+                        type:
+                          description: The storage type used for backup. When selecting
+                            the NFS type, nfs must be specified for backup when creating
+                            the cluster, otherwise it cannot be backed up
+                          enum:
+                          - s3
+                          - nfs
+                          type: string
+                      required:
+                      - type
+                      type: object
+                  required:
+                  - backupResource
+                  - backupType
+                  - name
+                  type: object
+                type: array
+              suspend:
+                description: |2-
+                   This flag tells the controller to suspend subsequent executions, it does
+                  not apply to already started executions. Defaults to false.
+                type: boolean
+            required:
+            - clusterName
             type: object
           status:
             description: GreatDBBackupScheduleStatus defines the observed state of
-              GreatDBBackupSchedule.
+              GreatDBBackup
+            properties:
+              message:
+                description: Human-readable message indicating details about last
+                  transition.
+                type: string
+              schedulers:
+                description: Current application plan
+                items:
+                  properties:
+                    backupResource:
+                      description: Backup method
+                      enum:
+                      - greatdb
+                      type: string
+                    backupType:
+                      description: Backup type
+                      enum:
+                      - full
+                      - inc
+                      type: string
+                    clean:
+                      description: Regular cleaning, default not to clean, configuration
+                        of this function must ensure that the storage has cleaning
+                        permissions,support units[h,d]
+                      type: string
+                    name:
+                      description: Name used by the component
+                      type: string
+                    schedule:
+                      description: |-
+                        The schedule in Cron format, see https://en.wikipedia.org/wiki/Cron.
+                        If left blank, initiate an immediate backup
+                      type: string
+                    selectStorage:
+                      description: select storage spec
+                      properties:
+                        s3:
+                          description: S3 storage
+                          properties:
+                            accessKey:
+                              type: string
+                            bucket:
+                              type: string
+                            endpointUrl:
+                              type: string
+                            secretKey:
+                              type: string
+                          required:
+                          - accessKey
+                          - bucket
+                          - endpointUrl
+                          - secretKey
+                          type: object
+                        type:
+                          description: The storage type used for backup. When selecting
+                            the NFS type, nfs must be specified for backup when creating
+                            the cluster, otherwise it cannot be backed up
+                          enum:
+                          - s3
+                          - nfs
+                          type: string
+                      required:
+                      - type
+                      type: object
+                  required:
+                  - backupResource
+                  - backupType
+                  - name
+                  type: object
+                type: array
+              suspend:
+                description: |2-
+                   This flag tells the controller to suspend subsequent executions, it does
+                  not apply to already started executions. Defaults to false.
+                type: boolean
             type: object
         type: object
     served: true
