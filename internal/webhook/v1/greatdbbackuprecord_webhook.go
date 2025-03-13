@@ -20,13 +20,18 @@ import (
 	"context"
 	"fmt"
 
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	greatdbv1 "greatdb.com/greatdb-operator/api/v1"
+	"greatdb.com/greatdb-operator/internal/utils/tools"
 )
 
 // nolint:unused
@@ -36,7 +41,7 @@ var greatdbbackuprecordlog = logf.Log.WithName("greatdbbackuprecord-resource")
 // SetupGreatDBBackupRecordWebhookWithManager registers the webhook for GreatDBBackupRecord in the manager.
 func SetupGreatDBBackupRecordWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr).For(&greatdbv1.GreatDBBackupRecord{}).
-		WithValidator(&GreatDBBackupRecordCustomValidator{}).
+		WithValidator(&GreatDBBackupRecordCustomValidator{Client: mgr.GetClient()}).
 		WithDefaulter(&GreatDBBackupRecordCustomDefaulter{}).
 		Complete()
 }
@@ -80,21 +85,39 @@ func (d *GreatDBBackupRecordCustomDefaulter) Default(ctx context.Context, obj ru
 //
 // NOTE: The +kubebuilder:object:generate=false marker prevents controller-gen from generating DeepCopy methods,
 // as this struct is used only for temporary operations and does not need to be deeply copied.
+// 新增客户端依赖
 type GreatDBBackupRecordCustomValidator struct {
-	// TODO(user): Add more fields as needed for validation
+	Client client.Client
 }
 
 var _ webhook.CustomValidator = &GreatDBBackupRecordCustomValidator{}
 
 // ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type GreatDBBackupRecord.
 func (v *GreatDBBackupRecordCustomValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	greatdbbackuprecord, ok := obj.(*greatdbv1.GreatDBBackupRecord)
+
+	backupRecord, ok := obj.(*greatdbv1.GreatDBBackupRecord)
 	if !ok {
 		return nil, fmt.Errorf("expected a GreatDBBackupRecord object but got %T", obj)
 	}
-	greatdbbackuprecordlog.Info("Validation for GreatDBBackupRecord upon creation", "name", greatdbbackuprecord.GetName())
 
-	// TODO(user): fill in your validation logic upon object creation.
+	greatdbbackuprecordlog.Info("Validation for GreatDBBackupRecord upon creation", "name", backupRecord.GetName())
+
+	var allErrs field.ErrorList
+	fieldPath := field.NewPath("spec")
+
+	if err := ValidateClusterName(ctx, v.Client, fieldPath, backupRecord.Namespace, backupRecord.Spec.ClusterName); err != nil {
+		allErrs = append(allErrs, err)
+	}
+
+	allErrs = append(allErrs, ValidateBackupRecord(ctx, v.Client, fieldPath, backupRecord)...)
+
+	if err := ValidateInstanceName(ctx, v.Client, fieldPath.Child("instanceName"), backupRecord.Namespace, backupRecord.Spec.ClusterName, backupRecord.Spec.InstanceName); err != nil {
+		allErrs = append(allErrs, err)
+	}
+
+	if len(allErrs) > 0 {
+		return nil, fmt.Errorf("validation failed: %v", allErrs)
+	}
 
 	return nil, nil
 }
@@ -123,4 +146,49 @@ func (v *GreatDBBackupRecordCustomValidator) ValidateDelete(ctx context.Context,
 	// TODO(user): fill in your validation logic upon object deletion.
 
 	return nil, nil
+}
+
+func ValidateBackupRecord(ctx context.Context, v client.Client, fieldPath *field.Path, backupRecord *greatdbv1.GreatDBBackupRecord) field.ErrorList {
+	var allErrs field.ErrorList
+	// 校验集群是否存在
+	cluster := &greatdbv1.GreatDBPaxos{}
+	if err := v.Get(ctx, types.NamespacedName{Namespace: backupRecord.Namespace, Name: backupRecord.Spec.ClusterName}, cluster); err != nil {
+		if k8serrors.IsNotFound(err) {
+			return nil
+		}
+
+		allErrs = append(allErrs, field.InternalError(fieldPath, err))
+	}
+
+	// 校验Clean字段格式
+	if backupRecord.Spec.Clean != "" {
+		if _, err := tools.StringToDuration(backupRecord.Spec.Clean); err != nil {
+			allErrs = append(allErrs, field.Invalid(
+				fieldPath.Child("clean"),
+				backupRecord.Spec.Clean,
+				fmt.Sprintf("Invalid clean format: %v", err),
+			))
+		}
+	}
+
+	// 校验存储配置
+	switch backupRecord.Spec.SelectStorage.Type {
+	case greatdbv1.BackupStorageNFS:
+		if cluster.Spec.Backup.NFS == nil {
+			allErrs = append(allErrs, field.Required(
+				fieldPath.Child("selectStorage", "type"),
+				"Cluster not configured with NFS backup",
+			))
+		}
+	case greatdbv1.BackupStorageS3:
+		s3 := backupRecord.Spec.SelectStorage.S3
+		if s3 == nil || s3.Bucket == "" || s3.EndpointURL == "" || s3.AccessKey == "" || s3.SecretKey == "" {
+			allErrs = append(allErrs, field.Required(
+				fieldPath.Child("selectStorage", "s3"),
+				"S3 configuration cannot be empty",
+			))
+		}
+	}
+
+	return allErrs
 }

@@ -4,11 +4,13 @@ go 1.23.0
 
 require (
 	github.com/go-kit/kit v0.13.0
+	github.com/go-sql-driver/mysql v1.9.0
 	github.com/golang/glog v1.2.1
 	github.com/onsi/ginkgo v1.16.5
 	github.com/onsi/ginkgo/v2 v2.22.0
 	github.com/onsi/gomega v1.36.1
 	github.com/spf13/pflag v1.0.5
+	gopkg.in/ini.v1 v1.67.0
 	k8s.io/api v0.32.1
 	k8s.io/apimachinery v0.32.1
 	k8s.io/client-go v0.32.1
@@ -17,6 +19,7 @@ require (
 
 require (
 	cel.dev/expr v0.18.0 // indirect
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20190424111038-f61b66f89f4a // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
