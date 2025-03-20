@@ -35,19 +35,19 @@ type CandidateDiagStatus string
 const (
 	CandidateDiagStatusUnknown CandidateDiagStatus = "UNKNOWN"
 
-	// MEMBER Instance is already a member of the cluster
+	// CandidateDiagStatusMember MEMBER Instance is already a member of the cluster
 	CandidateDiagStatusMember CandidateDiagStatus = "MEMBER"
 
-	// REJOINABLE Instance is a member of the cluster but can rejoin it
-	CandidateDiagStatusRejoinable CandidateDiagStatus = "REJOINABLE"
+	// CandidateDiagStatusRejoinAble REJOIN ABLE Instance is a member of the cluster but can rejoin it
+	CandidateDiagStatusRejoinAble CandidateDiagStatus = "REJOINABLE"
 
-	// JOINABLE Instance is not yet a member of the cluster but can join it
-	CandidateDiagStatusJoinable CandidateDiagStatus = "JOINABLE"
+	// CandidateDiagStatusJoinAble JOIN ABLE Instance is not yet a member of the cluster but can join it
+	CandidateDiagStatusJoinAble CandidateDiagStatus = "JOINABLE"
 
-	// BROKEN Instance is a member of the cluster but has a problem that prevents it from rejoining
+	// CandidateDiagStatusBroken BROKEN Instance is a member of the cluster but has a problem that prevents it from rejoining
 	CandidateDiagStatusBroken CandidateDiagStatus = "BROKEN"
 
-	// UNSUITABLE Instance is not yet a member of the cluster and can't join it
+	// CandidateDiagStatusUnsuitable UNSUITABLE Instance is not yet a member of the cluster and can't join it
 	CandidateDiagStatusUnsuitable CandidateDiagStatus = "UNSUITABLE"
 
 	CandidateDiagStatusUnreachable CandidateDiagStatus = "UNREACHABLE"
@@ -75,7 +75,7 @@ const (
 
 	// ClusterDiagStatusOnlinePartial - All members are reachable or part of the quorum
 	// - Some reachable members form a quorum between themselves
-	// - There may be members outside of the quorum in any state, but they must not form a quorum
+	// - There may be members outside the quorum in any state, but they must not form a quorum
 	// Note that there may be members that think are ONLINE, but minority in a view with UNREACHABLE members
 	ClusterDiagStatusOnlinePartial ClusterDiagStatusType = "ONLINE_PARTIAL"
 
@@ -144,38 +144,38 @@ const (
 	ConditionFalse ConditionStatus = "False"
 )
 
-// service state type of GreatDBPaxos
+// GreatDBPaxosConditionType service state type of GreatDBPaxos
 type GreatDBPaxosConditionType string
 
 const (
 
-	// The Pending phase generates relevant configurations, such as initializing configmap, secret, service
+	// GreatDBPaxosPending The Pending phase generates relevant configurations, such as initializing configmap, secret, service
 	GreatDBPaxosPending GreatDBPaxosConditionType = "Pending"
 
-	// Deploy db cluster in this phase
+	// GreatDBPaxosDeployDB Deploy db cluster in this phase
 	GreatDBPaxosDeployDB GreatDBPaxosConditionType = "DeployDB"
 
-	// Boot Cluster
+	// GreatDBPaxosBootCluster Boot Cluster
 	GreatDBPaxosBootCluster GreatDBPaxosConditionType = "BootCluster"
 
-	// Init User
+	// GreatDBPaxosInitUser Init User
 	GreatDBPaxosInitUser GreatDBPaxosConditionType = "InitUser"
 
-	// Successful deployment of DBscale cluster in this phase
+	// GreatDBPaxosSucceeded Successful deployment of DBscale cluster in this phase
 	GreatDBPaxosSucceeded GreatDBPaxosConditionType = "Succeeded"
 
-	// The cluster is ready at this stage
+	// GreatDBPaxosReady The cluster is ready at this stage
 	GreatDBPaxosReady GreatDBPaxosConditionType = "Ready"
 
-	// GreatDBPaxosDeleting The cluster is Deleting at this stage
+	// GreatDBPaxosTerminating GreatDBPaxosDeleting The cluster is Deleting at this stage
 	GreatDBPaxosTerminating GreatDBPaxosConditionType = "Terminating"
 
 	GreatDBPaxosRepair GreatDBPaxosConditionType = "Repair"
 
 	GreatDBPaxosPause GreatDBPaxosConditionType = "Pause"
-	// Restart
+	// GreatDBPaxosRestart Restart
 	GreatDBPaxosRestart GreatDBPaxosConditionType = "Restart"
-	// Upgrade
+	// GreatDBPaxosUpgrade Upgrade
 	GreatDBPaxosUpgrade GreatDBPaxosConditionType = "Upgrade"
 
 	// GreatDBPaxosScaleOut Greatdb is in the scale out phase
@@ -184,10 +184,10 @@ const (
 	// GreatDBPaxosScaleIn Greatdb is in the scale in phase
 	GreatDBPaxosScaleIn GreatDBPaxosConditionType = "ScaleIn"
 
-	// Greatdb failed to expand and shrink instances
+	// GreatDBPaxosScaleFailed Greatdb failed to expand and shrink instances
 	GreatDBPaxosScaleFailed GreatDBPaxosConditionType = "ScaleFailed"
 
-	// Failover in progress
+	// GreatDBPaxosFailover Failover in progress
 	GreatDBPaxosFailover GreatDBPaxosConditionType = "Failover"
 
 	// Failover succeeded

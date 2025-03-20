@@ -1,8 +1,10 @@
-package greatdbpaxos
+package core
 
 import (
 	"context"
 	"time"
+
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
 	resources "greatdb.com/greatdb-operator/internal/controller/resourcemanager"
@@ -12,10 +14,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func (great GreatDBManager) restartGreatDB(cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) (err error) {
+func (g *GreatDBPaxosManager) restartGreatDB(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) (err error) {
 
 	if cluster.Status.Phase != v1alpha1.GreatDBPaxosReady && cluster.Status.Phase != v1alpha1.GreatDBPaxosRestart {
 		return nil
@@ -37,12 +38,12 @@ func (great GreatDBManager) restartGreatDB(cluster *v1alpha1.GreatDBPaxos, podIn
 	}
 
 	if cluster.Spec.Restart.Mode == v1alpha1.ClusterRestart {
-		err = great.restartCluster(cluster, podIns)
+		err = g.restartCluster(ctx, cluster, podIns)
 		if err != nil {
 			return err
 		}
 	} else {
-		err = great.restartInstance(cluster, podIns)
+		err = g.restartInstance(ctx, cluster, podIns)
 		if err != nil {
 			return err
 		}
@@ -55,7 +56,7 @@ func (great GreatDBManager) restartGreatDB(cluster *v1alpha1.GreatDBPaxos, podIn
 	return nil
 }
 
-func (great GreatDBManager) restartInstance(cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) error {
+func (g *GreatDBPaxosManager) restartInstance(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) error {
 
 	if value, ok := cluster.Status.RestartMember.Restarting[podIns.Name]; ok {
 		// Restarting requires at least 30 seconds before continuing to determine
@@ -108,7 +109,7 @@ func (great GreatDBManager) restartInstance(cluster *v1alpha1.GreatDBPaxos, podI
 	switch cluster.Spec.Restart.Strategy {
 	case v1alpha1.AllRestart:
 
-		err := great.deletePod(podIns)
+		err := g.deletePod(ctx, podIns)
 
 		if err != nil {
 			return err
@@ -119,7 +120,7 @@ func (great GreatDBManager) restartInstance(cluster *v1alpha1.GreatDBPaxos, podI
 			return nil
 		}
 
-		err := great.deletePod(podIns)
+		err := g.deletePod(ctx, podIns)
 
 		if err != nil {
 			return err
@@ -132,7 +133,7 @@ func (great GreatDBManager) restartInstance(cluster *v1alpha1.GreatDBPaxos, podI
 
 }
 
-func (great GreatDBManager) restartCluster(cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) error {
+func (g *GreatDBPaxosManager) restartCluster(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) error {
 
 	if value, ok := cluster.Status.RestartMember.Restarting[podIns.Name]; ok {
 		// Restarting requires at least 30 seconds before continuing to determine
@@ -153,7 +154,7 @@ func (great GreatDBManager) restartCluster(cluster *v1alpha1.GreatDBPaxos, podIn
 		return nil
 	}
 
-	if great.restartClusterEnds(cluster) {
+	if g.restartClusterEnds(cluster) {
 		cluster.Status.RestartMember.Restarted = make(map[string]string, 0)
 		cluster.Status.RestartMember.Restarting = make(map[string]string, 0)
 		cluster.Spec.Restart.Enable = false
@@ -171,7 +172,7 @@ func (great GreatDBManager) restartCluster(cluster *v1alpha1.GreatDBPaxos, podIn
 	// Restart according to strategy
 	switch cluster.Spec.Restart.Strategy {
 	case v1alpha1.AllRestart:
-		err := great.deletePod(podIns)
+		err := g.deletePod(ctx, podIns)
 		if err != nil {
 			return err
 		}
@@ -180,7 +181,7 @@ func (great GreatDBManager) restartCluster(cluster *v1alpha1.GreatDBPaxos, podIn
 		if len(cluster.Status.RestartMember.Restarting) > 0 {
 			return nil
 		}
-		err := great.deletePod(podIns)
+		err := g.deletePod(ctx, podIns)
 		if err != nil {
 			return err
 		}
@@ -192,13 +193,12 @@ func (great GreatDBManager) restartCluster(cluster *v1alpha1.GreatDBPaxos, podIn
 
 }
 
-func (great GreatDBManager) deletePod(pod *corev1.Pod) error {
+func (g *GreatDBPaxosManager) deletePod(ctx context.Context, pod *corev1.Pod) error {
 
 	if len(pod.Finalizers) != 0 {
 
 		patch := `[{"op":"remove","path":"/metadata/finalizers"}]`
-		_, err := great.Client.KubeClientset.CoreV1().Pods(pod.Namespace).Patch(
-			context.TODO(), pod.Name, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+		err := g.Client.Patch(ctx, pod, client.RawPatch(types.JSONPatchType, []byte(patch)))
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
 				return nil
@@ -213,7 +213,7 @@ func (great GreatDBManager) deletePod(pod *corev1.Pod) error {
 		return nil
 	}
 
-	err := great.Client.KubeClientset.CoreV1().Pods(pod.Namespace).Delete(context.TODO(), pod.Name, metav1.DeleteOptions{})
+	err := g.Client.Delete(ctx, pod)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return nil
@@ -226,7 +226,7 @@ func (great GreatDBManager) deletePod(pod *corev1.Pod) error {
 
 }
 
-func (GreatDBManager) restartClusterEnds(cluster *v1alpha1.GreatDBPaxos) bool {
+func (*GreatDBPaxosManager) restartClusterEnds(cluster *v1alpha1.GreatDBPaxos) bool {
 	end := true
 	for _, member := range cluster.Status.Member {
 		if member.Type == v1alpha1.MemberStatusPause {

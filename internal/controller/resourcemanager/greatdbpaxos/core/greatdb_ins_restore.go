@@ -1,21 +1,23 @@
-package greatdbpaxos
+package core
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"strings"
 
-	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
-	resources "greatdb.com/greatdb-operator/internal/controller/resourcemanager"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	corev1 "k8s.io/api/core/v1"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
-	"k8s.io/apimachinery/pkg/labels"
+
+	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
+	resources "greatdb.com/greatdb-operator/internal/controller/resourcemanager"
 )
 
-func (great GreatDBManager) newGreatDBBackupContainers(backuprecord *v1alpha1.GreatDBBackupRecord, cluster *v1alpha1.GreatDBPaxos) (container corev1.Container) {
+func (g *GreatDBPaxosManager) newGreatDBBackupContainers(backuprecord *v1alpha1.GreatDBBackupRecord, cluster *v1alpha1.GreatDBPaxos) (container corev1.Container) {
 
-	env := great.newGreatDBBackupRestoreEnv(backuprecord, cluster)
+	env := g.newGreatDBBackupRestoreEnv(backuprecord, cluster)
 	imagePullPolicy := corev1.PullIfNotPresent
 	if cluster.Spec.ImagePullPolicy != "" {
 		imagePullPolicy = cluster.Spec.ImagePullPolicy
@@ -61,10 +63,10 @@ func (great GreatDBManager) newGreatDBBackupContainers(backuprecord *v1alpha1.Gr
 	return
 }
 
-func (great GreatDBManager) newGreatDBCloneContainers(donorIns string, cluster *v1alpha1.GreatDBPaxos) (container corev1.Container) {
+func (g *GreatDBPaxosManager) newGreatDBCloneContainers(donorIns string, cluster *v1alpha1.GreatDBPaxos) (container corev1.Container) {
 
-	env := great.newGreatDBCloneRestoreEnv(donorIns, cluster)
-	envForm := great.newGreatDBEnvForm(cluster.Spec.SecretName)
+	env := g.newGreatDBCloneRestoreEnv(donorIns, cluster)
+	envForm := g.newGreatDBEnvForm(cluster.Spec.SecretName)
 	imagePullPolicy := corev1.PullIfNotPresent
 	if cluster.Spec.ImagePullPolicy != "" {
 		imagePullPolicy = cluster.Spec.ImagePullPolicy
@@ -104,7 +106,7 @@ func (great GreatDBManager) newGreatDBCloneContainers(donorIns string, cluster *
 	return
 }
 
-func (great GreatDBManager) newGreatDBBackupRestoreEnv(backuprecord *v1alpha1.GreatDBBackupRecord, cluster *v1alpha1.GreatDBPaxos) (env []corev1.EnvVar) {
+func (g *GreatDBPaxosManager) newGreatDBBackupRestoreEnv(backuprecord *v1alpha1.GreatDBBackupRecord, cluster *v1alpha1.GreatDBPaxos) (env []corev1.EnvVar) {
 
 	backupServerAddress := resources.GetInstanceFQDN(backuprecord.Spec.ClusterName, backuprecord.Spec.InstanceName, backuprecord.Namespace, cluster.Spec.ClusterDomain)
 
@@ -176,7 +178,7 @@ func (great GreatDBManager) newGreatDBBackupRestoreEnv(backuprecord *v1alpha1.Gr
 	return
 }
 
-func (great GreatDBManager) newGreatDBCloneRestoreEnv(donorIns string, cluster *v1alpha1.GreatDBPaxos) (env []corev1.EnvVar) {
+func (g *GreatDBPaxosManager) newGreatDBCloneRestoreEnv(donorIns string, cluster *v1alpha1.GreatDBPaxos) (env []corev1.EnvVar) {
 
 	svcName := cluster.Name + resources.ComponentGreatDBSuffix
 	donor := fmt.Sprintf("%s.%s.%s.svc.%s", donorIns, svcName, cluster.Namespace, cluster.GetClusterDomain())
@@ -228,27 +230,29 @@ func (great GreatDBManager) newGreatDBCloneRestoreEnv(donorIns string, cluster *
 	return
 }
 
-func (great GreatDBManager) getLatestSuccessfulBackup(ns, clustername, restoreType string) *v1alpha1.GreatDBBackupRecord {
+func (g *GreatDBPaxosManager) getLatestSuccessfulBackup(ctx context.Context, ns, clustername, restoreType string) *v1alpha1.GreatDBBackupRecord {
 
-	selectLabel, _ := labels.Parse(
-		fmt.Sprintf(
-			"%s=%s,%s=%s",
-			resources.AppKubeInstanceLabelKey,
-			clustername,
-			resources.AppKubeBackupResourceTypeLabelKey,
-			restoreType,
-		),
-	)
-	records, err := great.Lister.BackupRecordLister.GreatDBBackupRecords(ns).List(selectLabel)
+	labelsMap := map[string]string{
+		resources.AppKubeInstanceLabelKey:           clustername,
+		resources.AppKubeBackupResourceTypeLabelKey: restoreType,
+	}
+
+	records := &v1alpha1.GreatDBBackupRecordList{}
+
+	// 获取指定命名空间和标签的资源
+	err := g.Client.List(ctx, records,
+		client.InNamespace(ns),
+		client.MatchingLabels(labelsMap))
+
 	if err != nil {
 		return nil
 	}
 
-	if len(records) == 0 {
+	if len(records.Items) == 0 {
 		return nil
 	}
 	var latest *v1alpha1.GreatDBBackupRecord
-	for _, record := range records {
+	for _, record := range records.Items {
 		if record.Status.Status != v1alpha1.GreatDBBackupRecordConditionSuccess || len(record.Status.BackupPath) == 0 {
 			continue
 		}
@@ -257,12 +261,12 @@ func (great GreatDBManager) getLatestSuccessfulBackup(ns, clustername, restoreTy
 		}
 
 		if latest == nil {
-			latest = record
+			*latest = record
 			continue
 		}
 
 		if latest.ObjectMeta.CreationTimestamp.Before(&record.ObjectMeta.CreationTimestamp) {
-			latest = record
+			*latest = record
 		}
 	}
 

@@ -1,13 +1,18 @@
-package greatdbpaxos
+package core
 
 import (
-	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
+	"context"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+
+	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
 )
 
 // pauseGreatdb Whether to pause the return instance
-func (great GreatDBManager) pauseGreatDB(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (bool, error) {
+func (g *GreatDBPaxosManager) pauseGreatDB(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (bool, error) {
 
 	if cluster.Spec.Pause == nil {
 		cluster.Spec.Pause = &v1alpha1.PauseGreatDB{}
@@ -17,14 +22,14 @@ func (great GreatDBManager) pauseGreatDB(cluster *v1alpha1.GreatDBPaxos, member 
 		return false, nil
 	}
 
-	return great.pauseInstance(cluster, member)
+	return g.pauseInstance(ctx, cluster, member)
 
 }
 
 // Pause successfully returns true
-func (great GreatDBManager) pauseInstance(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (bool, error) {
-
-	pod, err := great.Lister.PodLister.Pods(cluster.Namespace).Get(member.Name)
+func (g *GreatDBPaxosManager) pauseInstance(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (bool, error) {
+	var pod = &corev1.Pod{}
+	err := g.Client.Get(ctx, types.NamespacedName{Namespace: cluster.Namespace, Name: member.Name}, pod)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return true, nil
@@ -36,7 +41,7 @@ func (great GreatDBManager) pauseInstance(cluster *v1alpha1.GreatDBPaxos, member
 		return true, err
 	}
 
-	err = great.deletePod(pod)
+	err = g.deletePod(ctx, pod)
 	if err != nil {
 		return false, err
 	}
@@ -63,7 +68,7 @@ func NeedPause(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) 
 	return false
 }
 
-func (GreatDBManager) GetRunningMember(cluster *v1alpha1.GreatDBPaxos) int {
+func (*GreatDBPaxosManager) GetRunningMember(cluster *v1alpha1.GreatDBPaxos) int {
 
 	num := 0
 	for _, member := range cluster.Status.Member {

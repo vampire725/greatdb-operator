@@ -1,8 +1,12 @@
-package greatdbpaxos
+package core
 
 import (
+	"context"
 	"fmt"
 	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
 	"greatdb.com/greatdb-operator/internal/controller/resourcemanager"
@@ -12,7 +16,7 @@ import (
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
-func (great GreatDBManager) Scale(cluster *v1alpha1.GreatDBPaxos) error {
+func (g *GreatDBPaxosManager) Scale(ctx context.Context, cluster *v1alpha1.GreatDBPaxos) error {
 
 	if cluster.Status.Phase != v1alpha1.GreatDBPaxosReady && cluster.Status.Phase != v1alpha1.GreatDBPaxosScaleIn &&
 		cluster.Status.Phase != v1alpha1.GreatDBPaxosScaleOut && cluster.Status.Phase != v1alpha1.GreatDBPaxosFailover {
@@ -24,11 +28,11 @@ func (great GreatDBManager) Scale(cluster *v1alpha1.GreatDBPaxos) error {
 		cluster.Status.TargetInstances = cluster.Spec.Instances
 	}
 
-	if err := great.ScaleOut(cluster); err != nil {
+	if err := g.ScaleOut(ctx, cluster); err != nil {
 		return err
 	}
 
-	if err := great.ScaleIn(cluster); err != nil {
+	if err := g.ScaleIn(ctx, cluster); err != nil {
 		return err
 	}
 
@@ -36,7 +40,7 @@ func (great GreatDBManager) Scale(cluster *v1alpha1.GreatDBPaxos) error {
 
 }
 
-func (great GreatDBManager) ScaleOut(cluster *v1alpha1.GreatDBPaxos) error {
+func (g *GreatDBPaxosManager) ScaleOut(ctx context.Context, cluster *v1alpha1.GreatDBPaxos) error {
 
 	if cluster.Status.Phase == v1alpha1.GreatDBPaxosScaleIn {
 		return nil
@@ -45,7 +49,7 @@ func (great GreatDBManager) ScaleOut(cluster *v1alpha1.GreatDBPaxos) error {
 	// Only one node can be expanded at a time
 	if cluster.Status.TargetInstances > cluster.Status.CurrentInstances {
 		//determine whether the instance has completed expansion (joining the cluster)
-		member := great.GetMinOrMaxIndexMember(cluster, true)
+		member := g.GetMinOrMaxIndexMember(cluster, true)
 		// Waiting for the expansion of the previous instance to end
 		if member.Type != v1alpha1.MemberStatusOnline && cluster.Status.Phase == v1alpha1.GreatDBPaxosScaleOut {
 			return nil
@@ -72,17 +76,17 @@ func (great GreatDBManager) ScaleOut(cluster *v1alpha1.GreatDBPaxos) error {
 		cluster.Status.CurrentInstances += 1
 
 		groupSeed := ""
-		hosts := great.getGreatdbServiceClientUri(cluster)
+		hosts := g.getGreatdbServiceClientUri(cluster)
 
 		for _, host := range hosts {
 			groupSeed += fmt.Sprintf("%s:%d,", host, resourcemanager.GroupPort)
 		}
 		groupSeed = strings.TrimSuffix(groupSeed, ",")
 
-		return great.SetVariableGroupSeeds(cluster, hosts, groupSeed)
+		return g.SetVariableGroupSeeds(cluster, hosts, groupSeed)
 
 	} else {
-		member := great.GetMinOrMaxIndexMember(cluster, true)
+		member := g.GetMinOrMaxIndexMember(cluster, true)
 		if cluster.Status.Phase == v1alpha1.GreatDBPaxosScaleOut && member.Type == v1alpha1.MemberStatusOnline {
 			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosReady, "")
 		}
@@ -93,7 +97,7 @@ func (great GreatDBManager) ScaleOut(cluster *v1alpha1.GreatDBPaxos) error {
 
 }
 
-func (great GreatDBManager) ScaleIn(cluster *v1alpha1.GreatDBPaxos) error {
+func (g *GreatDBPaxosManager) ScaleIn(ctx context.Context, cluster *v1alpha1.GreatDBPaxos) error {
 	// Only one node can be expanded at a time
 	if cluster.Status.TargetInstances < cluster.Status.CurrentInstances {
 		if cluster.Status.Phase != v1alpha1.GreatDBPaxosFailover && cluster.Status.Phase != v1alpha1.GreatDBPaxosScaleIn {
@@ -106,7 +110,8 @@ func (great GreatDBManager) ScaleIn(cluster *v1alpha1.GreatDBPaxos) error {
 		}
 		// Waiting for the previous instance to shrink to an end
 		if cluster.Status.ScaleInMember != "" {
-			_, err := great.Lister.PodLister.Pods(cluster.Namespace).Get(cluster.Status.ScaleInMember)
+			var pod = &corev1.Pod{}
+			err := g.Client.Get(ctx, client.ObjectKey{Name: cluster.Status.ScaleInMember, Namespace: cluster.Namespace}, pod)
 			if err != nil {
 				if k8serrors.IsNotFound(err) {
 					cluster.Status.ScaleInMember = ""
@@ -119,24 +124,24 @@ func (great GreatDBManager) ScaleIn(cluster *v1alpha1.GreatDBPaxos) error {
 		}
 		cluster.Status.CurrentInstances -= 1
 
-		member := great.getScaleInMember(cluster)
-		great.ScaleInMember(cluster, member.Name)
+		member := g.getScaleInMember(cluster)
+		g.ScaleInMember(cluster, member.Name)
 
-		_ = great.stopGroupReplication(cluster, member)
+		_ = g.stopGroupReplication(cluster, member)
 
-		err := great.DeleteFinalizers(cluster.Namespace, member.PvcName)
+		err := g.DeleteFinalizers(ctx, cluster.Namespace, member.PvcName)
 		if err != nil {
 			return err
 		}
 
-		pod, err := great.Lister.PodLister.Pods(cluster.Namespace).Get(member.Name)
-
+		var pod = &corev1.Pod{}
+		err = g.Client.Get(ctx, client.ObjectKey{Name: member.Name, Namespace: cluster.Namespace}, pod)
 		if err != nil && !k8serrors.IsNotFound(err) {
 
 			dblog.Log.Reason(err).Error("failed to lister pod")
 			return err
 		}
-		err = great.deletePod(pod)
+		err = g.deletePod(ctx, pod)
 		if err != nil {
 			if !k8serrors.IsNotFound(err) {
 				dblog.Log.Reason(err).Error("failed to delete pod")
@@ -147,14 +152,14 @@ func (great GreatDBManager) ScaleIn(cluster *v1alpha1.GreatDBPaxos) error {
 		cluster.Status.ScaleInMember = member.Name
 
 		groupSeed := ""
-		hosts := great.getGreatdbServiceClientUri(cluster)
+		hosts := g.getGreatdbServiceClientUri(cluster)
 
 		for _, host := range hosts {
 			groupSeed += fmt.Sprintf("%s:%d,", host, resourcemanager.GroupPort)
 		}
 		groupSeed = strings.TrimSuffix(groupSeed, ",")
 
-		return great.SetVariableGroupSeeds(cluster, hosts, groupSeed)
+		return g.SetVariableGroupSeeds(cluster, hosts, groupSeed)
 
 	} else {
 		if cluster.Status.Phase == v1alpha1.GreatDBPaxosScaleIn {
@@ -167,7 +172,7 @@ func (great GreatDBManager) ScaleIn(cluster *v1alpha1.GreatDBPaxos) error {
 
 }
 
-func (great GreatDBManager) getGreatdbServiceClientUri(cluster *v1alpha1.GreatDBPaxos) (uris []string) {
+func (g *GreatDBPaxosManager) getGreatdbServiceClientUri(cluster *v1alpha1.GreatDBPaxos) (uris []string) {
 
 	for _, member := range cluster.Status.Member {
 
@@ -185,7 +190,7 @@ func (great GreatDBManager) getGreatdbServiceClientUri(cluster *v1alpha1.GreatDB
 	return uris
 }
 
-func (great GreatDBManager) SetVariableGroupSeeds(cluster *v1alpha1.GreatDBPaxos, hostList []string, groupSeed string) error {
+func (g *GreatDBPaxosManager) SetVariableGroupSeeds(cluster *v1alpha1.GreatDBPaxos, hostList []string, groupSeed string) error {
 
 	sql := fmt.Sprintf("SET GLOBAL group_replication_group_seeds='%s'", groupSeed)
 	client := internal.NewDBClient()
@@ -211,7 +216,7 @@ func (great GreatDBManager) SetVariableGroupSeeds(cluster *v1alpha1.GreatDBPaxos
 
 }
 
-func (great GreatDBManager) getScaleInMember(cluster *v1alpha1.GreatDBPaxos) v1alpha1.MemberCondition {
+func (g *GreatDBPaxosManager) getScaleInMember(cluster *v1alpha1.GreatDBPaxos) v1alpha1.MemberCondition {
 
 	var member v1alpha1.MemberCondition
 	switch cluster.Spec.Scaling.ScaleIn.Strategy {
@@ -268,7 +273,7 @@ func (great GreatDBManager) getScaleInMember(cluster *v1alpha1.GreatDBPaxos) v1a
 
 }
 
-func (great GreatDBManager) ScaleInMember(cluster *v1alpha1.GreatDBPaxos, name string) {
+func (g *GreatDBPaxosManager) ScaleInMember(cluster *v1alpha1.GreatDBPaxos, name string) {
 
 	index := 0
 	exist := false
@@ -287,7 +292,7 @@ func (great GreatDBManager) ScaleInMember(cluster *v1alpha1.GreatDBPaxos, name s
 
 }
 
-func (great GreatDBManager) GetMinOrMaxIndexMember(cluster *v1alpha1.GreatDBPaxos, max bool) v1alpha1.MemberCondition {
+func (g *GreatDBPaxosManager) GetMinOrMaxIndexMember(cluster *v1alpha1.GreatDBPaxos, max bool) v1alpha1.MemberCondition {
 
 	index := 0
 
@@ -308,7 +313,7 @@ func (great GreatDBManager) GetMinOrMaxIndexMember(cluster *v1alpha1.GreatDBPaxo
 
 }
 
-func (great GreatDBManager) stopGroupReplication(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) error {
+func (g *GreatDBPaxosManager) stopGroupReplication(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) error {
 	client := internal.NewDBClient()
 	user, pwd := resourcemanager.GetClusterUser(cluster)
 	host := resourcemanager.GetInstanceFQDN(cluster.Name, member.Name, cluster.Namespace, cluster.GetClusterDomain())

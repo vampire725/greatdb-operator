@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 
+	appsV1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -58,6 +59,7 @@ func (r *GreatDBBackupRecordReconciler) Reconcile(ctx context.Context, req ctrl.
 func (r *GreatDBBackupRecordReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&greatdbv1.GreatDBBackupRecord{}).
+		Owns(&appsV1.StatefulSet{}).
 		Named("greatdbbackuprecord").
 		Complete(r)
 }

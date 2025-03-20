@@ -6,4 +6,66 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
   name: greatdbpaxos-sample
 spec:
-  # TODO(user): Add fields here
+#  backup:
+#    enable: true
+#    nfs:
+#      path: /home/nfs/
+#      server: 172.17.120.143
+#    resources:
+#      limits:
+#        cpu: "2"
+#        memory: 2Gi
+#      requests:
+#        cpu: "1"
+#        memory: 1Gi
+  clusterDomain: cluster.local
+  delete: {}
+  failOver:
+    autoScaleIn: false
+    enable: true
+    period: 10m
+    maxInstance: 3
+    maxUnavailable: 0
+  image: registry.greatdb.com/operator/greatdb-6.0.1:latest
+  imagePullPolicy: IfNotPresent
+  instances: 3
+  maintenanceMode: false
+  pause:
+    mode: ins
+  podSecurityContext:
+    fsGroup: 1000
+    runAsUser: 1000
+  port: 3306
+  pvReclaimPolicy: Retain
+  resources:
+    limits:
+      cpu: "2"
+      memory: 2Gi
+    requests:
+      cpu: "2"
+      memory: 2Gi
+  restart:
+    mode: cluster
+    strategy: rolling
+  scaling:
+    scaleIn:
+      strategy: fault
+    scaleOut:
+      source: clone
+  service:
+    readPort: 30020
+    type: NodePort
+    writePort: 30021
+  upgradeStrategy: rollingUpgrade
+  version: 8.0.26
+  volumeClaimTemplates:
+    accessModes:
+      - ReadWriteOnce
+    resources:
+      requests:
+        storage: 10Gi
+  dashboard:
+    enable: true
+    image: registry.greatdb.com/operator/greatdb-dashboard:latest
+  logCollection:
+    image: registry.greatdb.com/operator/promtail-v2.7.4:latest

@@ -26,6 +26,8 @@ import (
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
 
+	policyv1 "k8s.io/api/policy/v1"
+	policyv1beta1 "k8s.io/api/policy/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -39,7 +41,6 @@ import (
 
 	greatdbv1 "greatdb.com/greatdb-operator/api/v1"
 	"greatdb.com/greatdb-operator/internal/controller"
-	webhookgreatdbv1 "greatdb.com/greatdb-operator/internal/webhook/v1"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -50,7 +51,8 @@ var (
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
-
+	utilruntime.Must(policyv1.AddToScheme(scheme))
+	utilruntime.Must(policyv1beta1.AddToScheme(scheme))
 	utilruntime.Must(greatdbv1.AddToScheme(scheme))
 	// +kubebuilder:scaffold:scheme
 }
@@ -204,8 +206,9 @@ func main() {
 	}
 
 	if err = (&controller.GreatDBPaxosReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorderFor("greatdb-controller"),
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "GreatDBPaxos")
 		os.Exit(1)
@@ -225,26 +228,26 @@ func main() {
 		os.Exit(1)
 	}
 	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err = webhookgreatdbv1.SetupGreatDBPaxosWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "GreatDBPaxos")
-			os.Exit(1)
-		}
-	}
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err = webhookgreatdbv1.SetupGreatDBBackupRecordWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "GreatDBBackupRecord")
-			os.Exit(1)
-		}
-	}
-	// nolint:goconst
-	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
-		if err = webhookgreatdbv1.SetupGreatDBBackupScheduleWebhookWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create webhook", "webhook", "GreatDBBackupSchedule")
-			os.Exit(1)
-		}
-	}
+	//if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+	//	if err = webhookgreatdbv1.SetupGreatDBPaxosWebhookWithManager(mgr); err != nil {
+	//		setupLog.Error(err, "unable to create webhook", "webhook", "GreatDBPaxos")
+	//		os.Exit(1)
+	//	}
+	//}
+	//// nolint:goconst
+	//if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+	//	if err = webhookgreatdbv1.SetupGreatDBBackupRecordWebhookWithManager(mgr); err != nil {
+	//		setupLog.Error(err, "unable to create webhook", "webhook", "GreatDBBackupRecord")
+	//		os.Exit(1)
+	//	}
+	//}
+	//// nolint:goconst
+	//if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+	//	if err = webhookgreatdbv1.SetupGreatDBBackupScheduleWebhookWithManager(mgr); err != nil {
+	//		setupLog.Error(err, "unable to create webhook", "webhook", "GreatDBBackupSchedule")
+	//		os.Exit(1)
+	//	}
+	//}
 	// +kubebuilder:scaffold:builder
 
 	if metricsCertWatcher != nil {

@@ -1,44 +1,48 @@
-package greatdbpaxos
+package core
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
 	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
 	resources "greatdb.com/greatdb-operator/internal/controller/resourcemanager"
 	dblog "greatdb.com/greatdb-operator/internal/utils/log"
 
 	corev1 "k8s.io/api/core/v1"
+	storageV1 "k8s.io/api/storage/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	// dblog "greatdb-operator/pkg/utils/log"
 )
 
-func (great GreatDBManager) SyncPvc(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) error {
+func (g *GreatDBPaxosManager) SyncPvc(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) error {
 
 	if member.PvcName == "" {
 		member.PvcName = member.Name
 	}
 
-	pvc, err := great.Lister.PvcLister.PersistentVolumeClaims(cluster.Namespace).Get(member.PvcName)
+	var pvc = &corev1.PersistentVolumeClaim{}
+	err := g.Client.Get(ctx, client.ObjectKey{Name: member.PvcName, Namespace: cluster.Namespace}, pvc)
 	if err != nil {
 
 		if k8serrors.IsNotFound(err) {
-			return great.CreatePvc(cluster, member)
+			return g.CreatePvc(ctx, cluster, member)
 		}
 		dblog.Log.Reason(err).Errorf("failed to lister pvc %s/%s", cluster.Namespace, member.PvcName)
 
 	}
 	newPvc := pvc.DeepCopy()
 
-	err = great.UpdatePvc(cluster, newPvc)
+	err = g.UpdatePvc(ctx, cluster, newPvc)
 	if err != nil {
 		return err
 	}
 
-	err = great.updatePv(newPvc, cluster.Spec.PvReclaimPolicy)
+	err = g.updatePv(ctx, newPvc, cluster.Spec.PvReclaimPolicy)
 	if err != nil {
 		return err
 	}
@@ -47,22 +51,22 @@ func (great GreatDBManager) SyncPvc(cluster *v1alpha1.GreatDBPaxos, member v1alp
 
 }
 
-func (great GreatDBManager) CreatePvc(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) error {
+func (g *GreatDBPaxosManager) CreatePvc(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) error {
 
 	if member.PvcName == "" {
 		member.PvcName = member.Name
 	}
 
-	pvc := great.NewPvc(cluster, member)
+	pvc := g.NewPvc(cluster, member)
 
-	_, err := great.Client.KubeClientset.CoreV1().PersistentVolumeClaims(cluster.Namespace).Create(context.TODO(), pvc, metav1.CreateOptions{})
+	err := g.Client.Create(ctx, pvc)
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {
 			//  need to add a label to the configmap to ensure that the operator can monitor it
 			labels, _ := json.Marshal(pvc.Labels)
 			data := fmt.Sprintf(`{"metadata":{"labels":%s}}`, labels)
-			_, err = great.Client.KubeClientset.CoreV1().PersistentVolumeClaims(cluster.Namespace).Patch(
-				context.TODO(), pvc.Name, types.StrategicMergePatchType, []byte(data), metav1.PatchOptions{})
+			patch := client.RawPatch(types.StrategicMergePatchType, []byte(data))
+			err = g.Client.Patch(ctx, pvc, patch)
 			if err != nil {
 				dblog.Log.Errorf("failed to update the labels of pod, message: %s", err.Error())
 				return err
@@ -79,7 +83,7 @@ func (great GreatDBManager) CreatePvc(cluster *v1alpha1.GreatDBPaxos, member v1a
 }
 
 // GetPvcLabels  Return to the default label settings
-func (great GreatDBManager) GetPvcLabels(name, podName string) (labels map[string]string) {
+func (g *GreatDBPaxosManager) GetPvcLabels(name, podName string) (labels map[string]string) {
 
 	labels = make(map[string]string)
 	labels[resources.AppKubeNameLabelKey] = resources.AppKubeNameLabelValue
@@ -90,14 +94,14 @@ func (great GreatDBManager) GetPvcLabels(name, podName string) (labels map[strin
 
 }
 
-func (great GreatDBManager) NewPvc(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (pvc *corev1.PersistentVolumeClaim) {
+func (g *GreatDBPaxosManager) NewPvc(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (pvc *corev1.PersistentVolumeClaim) {
 
 	owner := resources.GetGreatDBClusterOwnerReferences(cluster.Name, cluster.UID)
 	pvc = &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:            member.PvcName,
 			Namespace:       cluster.Namespace,
-			Labels:          great.GetPvcLabels(cluster.Name, member.Name),
+			Labels:          g.GetPvcLabels(cluster.Name, member.Name),
 			Finalizers:      []string{resources.FinalizersGreatDBCluster},
 			OwnerReferences: []metav1.OwnerReference{owner},
 			Annotations:     cluster.Spec.Annotations,
@@ -108,15 +112,14 @@ func (great GreatDBManager) NewPvc(cluster *v1alpha1.GreatDBPaxos, member v1alph
 
 }
 
-func (great GreatDBManager) UpdatePvc(cluster *v1alpha1.GreatDBPaxos, pvc *corev1.PersistentVolumeClaim) error {
+func (g *GreatDBPaxosManager) UpdatePvc(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, pvc *corev1.PersistentVolumeClaim) error {
 
 	if !cluster.DeletionTimestamp.IsZero() {
 		if len(pvc.Finalizers) == 0 {
 			return nil
 		}
 		patch := `[{"op":"remove","path":"/metadata/finalizers"}]`
-		_, err := great.Client.KubeClientset.CoreV1().PersistentVolumeClaims(pvc.Namespace).Patch(
-			context.TODO(), pvc.Name, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+		err := g.Client.Patch(ctx, pvc, client.RawPatch(types.JSONPatchType, []byte(patch)))
 		if err != nil {
 			dblog.Log.Errorf("failed to delete finalizers of pvc %s/%s,message: %s", pvc.Namespace, pvc.Name, err.Error())
 			return err
@@ -171,7 +174,7 @@ func (great GreatDBManager) UpdatePvc(cluster *v1alpha1.GreatDBPaxos, pvc *corev
 
 	// old < new
 	if result == -1 {
-		allow, reason, err := great.AllowVolumeExpansion(pvc)
+		allow, reason, err := g.AllowVolumeExpansion(ctx, pvc)
 
 		if err != nil {
 			dblog.Log.Reason(err).Error(reason)
@@ -187,13 +190,13 @@ func (great GreatDBManager) UpdatePvc(cluster *v1alpha1.GreatDBPaxos, pvc *corev
 
 		} else {
 			message := fmt.Sprintf("%s to %s:  %s", pvc.Spec.Resources.Requests.Storage().String(), cluster.Spec.VolumeClaimTemplates.Resources.Requests.Storage().String(), reason)
-			great.Recorder.Event(cluster, corev1.EventTypeWarning, StorageVerticalExpansionNotSupport, message)
+			g.Recorder.Event(cluster, corev1.EventTypeWarning, StorageVerticalExpansionNotSupport, message)
 			cluster.Spec.VolumeClaimTemplates.Resources.Requests[corev1.ResourceStorage] = pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 		}
 
 	} else if result == 1 {
 		message := fmt.Sprintf("%s to %s", pvc.Spec.Resources.Requests.Storage().String(), cluster.Spec.VolumeClaimTemplates.Resources.Requests.Storage().String())
-		great.Recorder.Event(cluster, corev1.EventTypeWarning, StorageVerticalShrinkagegprohibit, message)
+		g.Recorder.Event(cluster, corev1.EventTypeWarning, StorageVerticalShrinkagegprohibit, message)
 		cluster.Spec.VolumeClaimTemplates.Resources.Requests[corev1.ResourceStorage] = pvc.Spec.Resources.Requests[corev1.ResourceStorage]
 	}
 
@@ -208,8 +211,7 @@ func (great GreatDBManager) UpdatePvc(cluster *v1alpha1.GreatDBPaxos, pvc *corev
 	patch += "]"
 
 	if len(changeArr) > 0 {
-		_, err := great.Client.KubeClientset.CoreV1().PersistentVolumeClaims(pvc.Namespace).Patch(
-			context.TODO(), pvc.Name, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+		err := g.Client.Patch(ctx, pvc, client.RawPatch(types.JSONPatchType, []byte(patch)))
 		if err != nil {
 			dblog.Log.Errorf("failed to update pvc %s/%s,message: %s", pvc.Namespace, pvc.Name, err.Error())
 			return err
@@ -220,13 +222,13 @@ func (great GreatDBManager) UpdatePvc(cluster *v1alpha1.GreatDBPaxos, pvc *corev
 
 }
 
-func (great GreatDBManager) updatePv(pvc *corev1.PersistentVolumeClaim, reclaimPolicy corev1.PersistentVolumeReclaimPolicy) error {
+func (g *GreatDBPaxosManager) updatePv(ctx context.Context, pvc *corev1.PersistentVolumeClaim, reclaimPolicy corev1.PersistentVolumeReclaimPolicy) error {
 
 	if pvc.Spec.VolumeName == "" {
 		return nil
 	}
 
-	pv, err := great.GetPv(pvc.Spec.VolumeName)
+	pv, err := g.GetPv(ctx, pvc.Spec.VolumeName)
 	if err != nil {
 		return err
 	}
@@ -236,8 +238,7 @@ func (great GreatDBManager) updatePv(pvc *corev1.PersistentVolumeClaim, reclaimP
 
 	patch := fmt.Sprintf(`[{"op":"replace","path":"/spec/persistentVolumeReclaimPolicy","value":"%s"}]`, reclaimPolicy)
 
-	_, err = great.Client.KubeClientset.CoreV1().PersistentVolumes().Patch(context.TODO(),
-		pv.Name, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+	err = g.Client.Patch(ctx, pv, client.RawPatch(types.JSONPatchType, []byte(patch)))
 	if err != nil {
 		dblog.Log.Errorf(err.Error())
 		return err
@@ -247,15 +248,15 @@ func (great GreatDBManager) updatePv(pvc *corev1.PersistentVolumeClaim, reclaimP
 
 }
 
-func (great GreatDBManager) GetPv(pvName string) (pv *corev1.PersistentVolume, err error) {
+func (g *GreatDBPaxosManager) GetPv(ctx context.Context, pvName string) (pv *corev1.PersistentVolume, err error) {
 
-	pv, err = great.Lister.PvLister.Get(pvName)
+	err = g.Client.Get(ctx, client.ObjectKey{Name: pvName}, pv)
 	if err != nil {
 		if !k8serrors.IsNotFound(err) {
 			dblog.Log.Errorf("failed to lister pv %s", pvName)
 			return
 		}
-		pv, err = great.Client.KubeClientset.CoreV1().PersistentVolumes().Get(context.TODO(), pvName, metav1.GetOptions{})
+		err = g.Client.Get(ctx, client.ObjectKey{Name: pvName}, pv)
 		if err != nil {
 			dblog.Log.Errorf("failed to get pv %s", pvName)
 			return nil, err
@@ -269,7 +270,8 @@ func (great GreatDBManager) GetPv(pvName string) (pv *corev1.PersistentVolume, e
 		pv.ObjectMeta.Labels[resources.AppKubeNameLabelKey] = resources.AppKubeNameLabelValue
 		labels, _ := json.Marshal(pv.ObjectMeta.Labels)
 		data := fmt.Sprintf(`{"metadata":{"labels":%s}}`, labels)
-		_, err = great.Client.KubeClientset.CoreV1().PersistentVolumes().Patch(context.TODO(), pvName, types.StrategicMergePatchType, []byte(data), metav1.PatchOptions{})
+		patch := client.RawPatch(types.StrategicMergePatchType, []byte(data))
+		err = g.Client.Patch(ctx, pv, patch)
 		if err != nil {
 			dblog.Log.Reason(err).Errorf("failed to update the label of PV %s", pvName)
 		}
@@ -278,7 +280,7 @@ func (great GreatDBManager) GetPv(pvName string) (pv *corev1.PersistentVolume, e
 	return
 }
 
-func (great GreatDBManager) AllowVolumeExpansion(pvc *corev1.PersistentVolumeClaim) (allow bool, reason string, err error) {
+func (g *GreatDBPaxosManager) AllowVolumeExpansion(ctx context.Context, pvc *corev1.PersistentVolumeClaim) (allow bool, reason string, err error) {
 
 	if pvc.Spec.StorageClassName == nil {
 		reason = fmt.Sprintf("PVC %s/%s is not bound to a storage class, and the cluster environment has not set a default storage class", pvc.Namespace, pvc.Name)
@@ -289,8 +291,8 @@ func (great GreatDBManager) AllowVolumeExpansion(pvc *corev1.PersistentVolumeCla
 		reason = fmt.Sprintf("PVC %s/%s is not bound to a storage class, and the cluster environment has not set a default storage class", pvc.Namespace, pvc.Name)
 		return allow, reason, nil
 	}
-
-	storageClass, err := great.Client.KubeClientset.StorageV1().StorageClasses().Get(context.TODO(), storageClassName, metav1.GetOptions{})
+	var storageClass = &storageV1.StorageClass{}
+	err = g.Client.Get(ctx, client.ObjectKey{Name: storageClassName}, storageClass)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			reason = fmt.Sprintf("storageClass %s not exist", storageClassName)
@@ -312,7 +314,7 @@ func (great GreatDBManager) AllowVolumeExpansion(pvc *corev1.PersistentVolumeCla
 		return allow, reason, err
 	}
 
-	pv, err := great.GetPv(pvc.Spec.VolumeName)
+	pv, err := g.GetPv(ctx, pvc.Spec.VolumeName)
 	if err != nil {
 		dblog.Log.Errorf("failed to get pv %s, message: %s", pvc.Spec.VolumeName, err.Error())
 		return allow, reason, err
@@ -330,18 +332,17 @@ func (great GreatDBManager) AllowVolumeExpansion(pvc *corev1.PersistentVolumeCla
 
 }
 
-func (great GreatDBManager) Deletepvc(pvc *corev1.PersistentVolumeClaim) error {
+func (g *GreatDBPaxosManager) Deletepvc(ctx context.Context, pvc *corev1.PersistentVolumeClaim) error {
 	if len(pvc.Finalizers) != 0 {
 		patch := `[{"op":"remove","path":"/metadata/finalizers"}]`
-		_, err := great.Client.KubeClientset.CoreV1().PersistentVolumeClaims(pvc.Namespace).Patch(
-			context.TODO(), pvc.Name, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+		err := g.Client.Patch(ctx, pvc, client.RawPatch(types.JSONPatchType, []byte(patch)))
 		if err != nil {
 			dblog.Log.Errorf("failed to delete finalizers of pvc %s/%s,message: %s", pvc.Namespace, pvc.Name, err.Error())
 			return err
 		}
 	}
 
-	err := great.Client.KubeClientset.CoreV1().PersistentVolumeClaims(pvc.Namespace).Delete(context.TODO(), pvc.Name, metav1.DeleteOptions{})
+	err := g.Client.Delete(ctx, pvc)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return nil
@@ -354,9 +355,9 @@ func (great GreatDBManager) Deletepvc(pvc *corev1.PersistentVolumeClaim) error {
 	return nil
 }
 
-func (great GreatDBManager) DeleteFinalizers(ns, pvcName string) error {
-
-	pvc, err := great.Lister.PvcLister.PersistentVolumeClaims(ns).Get(pvcName)
+func (g *GreatDBPaxosManager) DeleteFinalizers(ctx context.Context, ns, pvcName string) error {
+	var pvc = &corev1.PersistentVolumeClaim{}
+	err := g.Client.Get(ctx, client.ObjectKey{Name: pvcName, Namespace: ns}, pvc)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return nil
@@ -369,8 +370,7 @@ func (great GreatDBManager) DeleteFinalizers(ns, pvcName string) error {
 		return nil
 	}
 	patch := `[{"op":"remove","path":"/metadata/finalizers"}]`
-	_, err = great.Client.KubeClientset.CoreV1().PersistentVolumeClaims(ns).Patch(
-		context.TODO(), pvcName, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+	err = g.Client.Patch(ctx, pvc, client.RawPatch(types.JSONPatchType, []byte(patch)))
 	if err != nil {
 		dblog.Log.Errorf("failed to delete finalizers of pvc %s/%s,message: %s", ns, pvcName, err.Error())
 		return err

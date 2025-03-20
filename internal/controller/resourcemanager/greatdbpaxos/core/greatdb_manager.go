@@ -1,4 +1,4 @@
-package greatdbpaxos
+package core
 
 import (
 	"context"
@@ -8,16 +8,17 @@ import (
 	"strconv"
 	"time"
 
+	"greatdb.com/greatdb-operator/api/v1"
 	"greatdb.com/greatdb-operator/internal/config"
-
-	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
 	"greatdb.com/greatdb-operator/internal/controller/resourcemanager"
+	"greatdb.com/greatdb-operator/internal/controller/resourcemanager/greatdbpaxos/configmap"
+	"greatdb.com/greatdb-operator/internal/controller/resourcemanager/secret"
+	"greatdb.com/greatdb-operator/internal/controller/resourcemanager/service"
 	dblog "greatdb.com/greatdb-operator/internal/utils/log"
 
 	corev1 "k8s.io/api/core/v1"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
@@ -25,33 +26,61 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type GreatDBManager struct {
+type GreatDBPaxosManager struct {
 	Client   client.Client
-	Scheme   *runtime.Scheme
 	Recorder record.EventRecorder
 }
 
-func (great *GreatDBManager) Sync(cluster *v1alpha1.GreatDBPaxos) (err error) {
+type Manager interface {
+	Sync(ctx context.Context, cluster *v1.GreatDBPaxos) (err error)
+}
 
-	if cluster.Status.Phase == v1alpha1.GreatDBPaxosPending {
-		cluster.Status.Phase = v1alpha1.GreatDBPaxosDeployDB
+type GreatDBPaxosResourceManagers struct {
+	ConfigMapManager    Manager
+	ServiceManager      Manager
+	SecretManager       Manager
+	GreatDBPaxosManager Manager
+	DashboardManager    Manager
+}
+
+func NewGreatDBPaxosResourceManagers(client client.Client, recorder record.EventRecorder) *GreatDBPaxosResourceManagers {
+	configmapManager := &configmap.Manager{Client: client, Recorder: recorder}
+	serviceManager := &service.Manager{Client: client, Recorder: recorder}
+	secretmanager := &secret.Manager{Client: client, Recorder: recorder}
+	dashboardManager := &DashboardManager{Client: client, Recorder: recorder}
+	greatdbPaxosManager := &GreatDBPaxosManager{Client: client, Recorder: recorder}
+
+	return &GreatDBPaxosResourceManagers{
+		ConfigMapManager:    configmapManager,
+		ServiceManager:      serviceManager,
+		SecretManager:       secretmanager,
+		GreatDBPaxosManager: greatdbPaxosManager,
+		DashboardManager:    dashboardManager,
 	}
 
-	great.UpdateTargetInstanceToMember(cluster)
+}
 
-	if err = great.CreateOrUpdateGreatDB(cluster); err != nil {
+func (g *GreatDBPaxosManager) Sync(ctx context.Context, cluster *v1.GreatDBPaxos) (err error) {
+
+	if cluster.Status.Phase == v1.GreatDBPaxosPending {
+		cluster.Status.Phase = v1.GreatDBPaxosDeployDB
+	}
+
+	g.UpdateTargetInstanceToMember(cluster)
+
+	if err = g.CreateOrUpdateGreatDB(ctx, cluster); err != nil {
 		return err
 	}
 
-	if err = great.UpdateGreatDBStatus(cluster); err != nil {
+	if err = g.UpdateGreatDBStatus(ctx, cluster); err != nil {
 		return err
 	}
 
-	if err = great.Scale(cluster); err != nil {
+	if err = g.Scale(ctx, cluster); err != nil {
 		return err
 	}
 
-	if err = great.failover(cluster); err != nil {
+	if err = g.failOver(ctx, cluster); err != nil {
 		return err
 	}
 
@@ -59,9 +88,9 @@ func (great *GreatDBManager) Sync(cluster *v1alpha1.GreatDBPaxos) (err error) {
 
 }
 
-func (great GreatDBManager) UpdateTargetInstanceToMember(cluster *v1alpha1.GreatDBPaxos) {
+func (g *GreatDBPaxosManager) UpdateTargetInstanceToMember(cluster *v1.GreatDBPaxos) {
 
-	if cluster.Status.Phase != v1alpha1.GreatDBPaxosDeployDB {
+	if cluster.Status.Phase != v1.GreatDBPaxosDeployDB {
 		return
 	}
 
@@ -69,7 +98,7 @@ func (great GreatDBManager) UpdateTargetInstanceToMember(cluster *v1alpha1.Great
 	cluster.Status.TargetInstances = cluster.Spec.Instances
 
 	if cluster.Status.Member == nil {
-		cluster.Status.Member = make([]v1alpha1.MemberCondition, 0)
+		cluster.Status.Member = make([]v1.MemberCondition, 0)
 	}
 
 	num := len(cluster.Status.Member)
@@ -81,10 +110,10 @@ func (great GreatDBManager) UpdateTargetInstanceToMember(cluster *v1alpha1.Great
 
 	for num < int(cluster.Status.TargetInstances) {
 		name := fmt.Sprintf("%s%s-%d", cluster.Name, resourcemanager.ComponentGreatDBSuffix, index)
-		cluster.Status.Member = append(cluster.Status.Member, v1alpha1.MemberCondition{
+		cluster.Status.Member = append(cluster.Status.Member, v1.MemberCondition{
 			Name:       name,
 			Index:      index,
-			CreateType: v1alpha1.InitCreateMember,
+			CreateType: v1.InitCreateMember,
 			PvcName:    name,
 		})
 		num++
@@ -94,10 +123,10 @@ func (great GreatDBManager) UpdateTargetInstanceToMember(cluster *v1alpha1.Great
 
 }
 
-func (great *GreatDBManager) CreateOrUpdateGreatDB(cluster *v1alpha1.GreatDBPaxos) error {
+func (g *GreatDBPaxosManager) CreateOrUpdateGreatDB(ctx context.Context, cluster *v1.GreatDBPaxos) error {
 
 	for _, member := range cluster.Status.Member {
-		if err := great.CreateOrUpdateInstance(cluster, member); err != nil {
+		if err := g.CreateOrUpdateInstance(ctx, cluster, member); err != nil {
 			return err
 		}
 	}
@@ -105,18 +134,18 @@ func (great *GreatDBManager) CreateOrUpdateGreatDB(cluster *v1alpha1.GreatDBPaxo
 	return nil
 }
 
-func (great GreatDBManager) CreateOrUpdateInstance(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) error {
+func (g *GreatDBPaxosManager) CreateOrUpdateInstance(ctx context.Context, cluster *v1.GreatDBPaxos, member v1.MemberCondition) error {
 
 	ns := cluster.GetNamespace()
 
-	if err := great.SyncPvc(cluster, member); err != nil {
+	if err := g.SyncPvc(ctx, cluster, member); err != nil {
 		return err
 	}
 
 	if cluster.DeletionTimestamp.IsZero() {
 
 		// pause
-		pause, err := great.pauseGreatDB(cluster, member)
+		pause, err := g.pauseGreatDB(ctx, cluster, member)
 		if err != nil {
 			return err
 		}
@@ -126,7 +155,7 @@ func (great GreatDBManager) CreateOrUpdateInstance(cluster *v1alpha1.GreatDBPaxo
 		}
 	}
 
-	del, err := great.deleteGreatDB(cluster, member)
+	del, err := g.deleteGreatDB(ctx, cluster, member)
 	if err != nil {
 		return err
 	}
@@ -137,11 +166,11 @@ func (great GreatDBManager) CreateOrUpdateInstance(cluster *v1alpha1.GreatDBPaxo
 
 	// create
 	pod := &corev1.Pod{}
-	err = great.Client.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: member.Name}, pod)
+	err = g.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: member.Name}, pod)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			// create greatdb instance
-			if err = great.createGreatDBPod(cluster, member); err != nil {
+			if err = g.createGreatDBPod(ctx, cluster, member); err != nil {
 				return err
 			}
 			// if member.CreateType == v1alpha1.ScaleCreateMember || member.CreateType == v1alpha1.FailOverCreateMember {
@@ -157,7 +186,7 @@ func (great GreatDBManager) CreateOrUpdateInstance(cluster *v1alpha1.GreatDBPaxo
 
 	if cluster.DeletionTimestamp.IsZero() {
 		// restart
-		if err := great.restartGreatDB(cluster, newPod); err != nil {
+		if err := g.restartGreatDB(ctx, cluster, newPod); err != nil {
 			return err
 		}
 
@@ -166,7 +195,7 @@ func (great GreatDBManager) CreateOrUpdateInstance(cluster *v1alpha1.GreatDBPaxo
 		}
 
 		// upgrade
-		err = great.upgradeGreatDB(cluster, newPod)
+		err = g.upgradeGreatDB(ctx, cluster, newPod)
 		if err != nil {
 			return err
 		}
@@ -178,7 +207,7 @@ func (great GreatDBManager) CreateOrUpdateInstance(cluster *v1alpha1.GreatDBPaxo
 	}
 
 	// update meta
-	if err = great.updateGreatDBPod(cluster, newPod); err != nil {
+	if err = g.updateGreatDBPod(ctx, cluster, newPod); err != nil {
 		return err
 	}
 
@@ -187,27 +216,27 @@ func (great GreatDBManager) CreateOrUpdateInstance(cluster *v1alpha1.GreatDBPaxo
 
 }
 
-func (great GreatDBManager) createGreatDBPod(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) error {
+func (g *GreatDBPaxosManager) createGreatDBPod(ctx context.Context, cluster *v1.GreatDBPaxos, member v1.MemberCondition) error {
 	// The cluster starts to clean, and no more resources need to be created
 	if !cluster.DeletionTimestamp.IsZero() {
 		return nil
 	}
 
-	pod, _ := great.NewGreatDBPod(cluster, member)
+	pod, _ := g.NewGreatDBPod(ctx, cluster, member)
 
 	if pod == nil {
 		return nil
 	}
 
-	_, err := great.Client.KubeClientset.CoreV1().Pods(cluster.Namespace).Create(context.TODO(), pod, metav1.CreateOptions{})
+	err := g.Client.Create(ctx, pod, &client.CreateOptions{})
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {
 			// The pods already exists, but for unknown reasons, the operator has not monitored the greatdb pod.
 			//  need to add a label to the configmap to ensure that the operator can monitor it
 			labels, _ := json.Marshal(pod.ObjectMeta.Labels)
 			data := fmt.Sprintf(`{"metadata":{"labels":%s}}`, labels)
-			_, err = great.Client.KubeClientset.CoreV1().Pods(cluster.Namespace).Patch(
-				context.TODO(), pod.Name, types.StrategicMergePatchType, []byte(data), metav1.PatchOptions{})
+			patch := client.RawPatch(types.StrategicMergePatchType, []byte(data))
+			err = g.Client.Patch(ctx, pod, patch)
 			if err != nil {
 				dblog.Log.Errorf("failed to update the labels of pod, message: %s", err.Error())
 				return err
@@ -225,13 +254,13 @@ func (great GreatDBManager) createGreatDBPod(cluster *v1alpha1.GreatDBPaxos, mem
 
 }
 
-func (great GreatDBManager) NewGreatDBPod(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (pod *corev1.Pod, err error) {
+func (g *GreatDBPaxosManager) NewGreatDBPod(ctx context.Context, cluster *v1.GreatDBPaxos, member v1.MemberCondition) (pod *corev1.Pod, err error) {
 
 	owner := resourcemanager.GetGreatDBClusterOwnerReferences(cluster.Name, cluster.UID)
-	labels := resourcemanager.MegerLabels(cluster.Spec.Labels, great.GetLabels(cluster.Name))
+	labels := resourcemanager.MergeLabels(cluster.Spec.Labels, g.GetLabels(cluster.Name))
 	// TODO Debug
 	labels[resourcemanager.AppKubePodLabelKey] = member.Name
-	podSpec, err := great.GetPodSpec(cluster, member)
+	podSpec, err := g.GetPodSpec(ctx, cluster, member)
 	if err != nil {
 		return nil, err
 	}
@@ -251,7 +280,7 @@ func (great GreatDBManager) NewGreatDBPod(cluster *v1alpha1.GreatDBPaxos, member
 }
 
 // GetLabels  Return to the default label settings
-func (great GreatDBManager) GetLabels(clusterName string) (labels map[string]string) {
+func (g *GreatDBPaxosManager) GetLabels(clusterName string) (labels map[string]string) {
 
 	labels = make(map[string]string)
 	labels[resourcemanager.AppKubeNameLabelKey] = resourcemanager.AppKubeNameLabelValue
@@ -263,17 +292,17 @@ func (great GreatDBManager) GetLabels(clusterName string) (labels map[string]str
 
 }
 
-func (great GreatDBManager) GetPodSpec(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (podSpec corev1.PodSpec, err error) {
+func (g *GreatDBPaxosManager) GetPodSpec(ctx context.Context, cluster *v1.GreatDBPaxos, member v1.MemberCondition) (podSpec corev1.PodSpec, err error) {
 
 	configmapName := cluster.Name + resourcemanager.ComponentGreatDBSuffix
 	serviceName := cluster.Name + resourcemanager.ComponentGreatDBSuffix
 
-	containers := great.newContainers(serviceName, cluster, member)
-	initContainer, err := great.newGreatDBInitContainers(cluster, member)
+	containers := g.newContainers(serviceName, cluster, member)
+	initContainer, err := g.newGreatDBInitContainers(ctx, cluster, member)
 	if err != nil {
 		return podSpec, err
 	}
-	volume := great.newVolumes(configmapName, member.PvcName, cluster)
+	volume := g.newVolumes(configmapName, member.PvcName, cluster)
 	// update Affinity
 	affinity := cluster.Spec.Affinity
 
@@ -298,12 +327,12 @@ func (great GreatDBManager) GetPodSpec(cluster *v1alpha1.GreatDBPaxos, member v1
 }
 
 // newGreatDBInitContainers
-func (great GreatDBManager) newGreatDBInitContainers(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (containers []corev1.Container, err error) {
-	var lastBackuprecord *v1alpha1.GreatDBBackupRecord
-	if member.CreateType == v1alpha1.ScaleCreateMember || member.CreateType == v1alpha1.FailOverCreateMember {
+func (g *GreatDBPaxosManager) newGreatDBInitContainers(ctx context.Context, cluster *v1.GreatDBPaxos, member v1.MemberCondition) (containers []corev1.Container, err error) {
+	var lastBackuprecord *v1.GreatDBBackupRecord
+	if member.CreateType == v1.ScaleCreateMember || member.CreateType == v1.FailOverCreateMember {
 
-		if cluster.Spec.Scaling.ScaleOut.Source == v1alpha1.ScaleOutSourceBackup {
-			lastBackuprecord = great.getLatestSuccessfulBackup(cluster.Namespace, cluster.Name, string(v1alpha1.GreatDBBackupResourceType))
+		if cluster.Spec.Scaling.ScaleOut.Source == v1.ScaleOutSourceBackup {
+			lastBackuprecord = g.getLatestSuccessfulBackup(ctx, cluster.Namespace, cluster.Name, string(v1.GreatDBBackupResourceType))
 		}
 
 		if lastBackuprecord == nil {
@@ -313,10 +342,10 @@ func (great GreatDBManager) newGreatDBInitContainers(cluster *v1alpha1.GreatDBPa
 
 			for _, member := range cluster.Status.Member {
 
-				if member.Type != v1alpha1.MemberStatusOnline {
+				if member.Type != v1.MemberStatusOnline {
 					continue
 				}
-				if v1alpha1.MemberRoleType(member.Role).Parse() == v1alpha1.MemberRolePrimary {
+				if v1.MemberRoleType(member.Role).Parse() == v1.MemberRolePrimary {
 					primaryIns = member.Name
 				} else {
 					instanceName = append(instanceName, member.Name)
@@ -340,17 +369,17 @@ func (great GreatDBManager) newGreatDBInitContainers(cluster *v1alpha1.GreatDBPa
 				return nil, fmt.Errorf("No ready instances available for cloning operation")
 			}
 
-			db := great.newGreatDBCloneContainers(ins, cluster)
+			db := g.newGreatDBCloneContainers(ins, cluster)
 			containers = append(containers, db)
 
 		} else {
-			db := great.newGreatDBBackupContainers(lastBackuprecord, cluster)
+			db := g.newGreatDBBackupContainers(lastBackuprecord, cluster)
 			containers = append(containers, db)
 		}
 
 	}
 
-	if member.CreateType == v1alpha1.InitCreateMember && cluster.Spec.CloneSource != nil {
+	if member.CreateType == v1.InitCreateMember && cluster.Spec.CloneSource != nil {
 
 		if cluster.Spec.CloneSource.ClusterName == "" && cluster.Spec.CloneSource.BackupRecordName == "" {
 			return containers, nil
@@ -374,13 +403,13 @@ func (great GreatDBManager) newGreatDBInitContainers(cluster *v1alpha1.GreatDBPa
 
 		if recordName == "" {
 
-			lastBackuprecord = great.getLatestSuccessfulBackup(ns, clusterName, string(v1alpha1.GreatDBBackupResourceType))
+			lastBackuprecord = g.getLatestSuccessfulBackup(ctx, ns, clusterName, string(v1.GreatDBBackupResourceType))
 			if lastBackuprecord == nil {
 				return containers, fmt.Errorf("the clone source does not have a completed backup record")
 			}
 			cluster.Status.CloneSource.ClusterName = clusterName
 		} else {
-			lastBackuprecord, err = great.Lister.BackupRecordLister.GreatDBBackupRecords(ns).Get(recordName)
+			err = g.Client.Get(ctx, client.ObjectKey{Namespace: ns, Name: recordName}, lastBackuprecord)
 			if err != nil {
 				dblog.Log.Reason(err).Error("failed to get GreatDBBackupRecords")
 				return containers, err
@@ -389,7 +418,7 @@ func (great GreatDBManager) newGreatDBInitContainers(cluster *v1alpha1.GreatDBPa
 		}
 
 		cluster.Status.CloneSource.BackupRecordName = lastBackuprecord.Name
-		db := great.newGreatDBBackupContainers(lastBackuprecord, cluster)
+		db := g.newGreatDBBackupContainers(lastBackuprecord, cluster)
 		containers = append(containers, db)
 
 	}
@@ -397,22 +426,22 @@ func (great GreatDBManager) newGreatDBInitContainers(cluster *v1alpha1.GreatDBPa
 	return
 }
 
-func (great GreatDBManager) newContainers(serviceName string, cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (containers []corev1.Container) {
+func (g *GreatDBPaxosManager) newContainers(serviceName string, cluster *v1.GreatDBPaxos, member v1.MemberCondition) (containers []corev1.Container) {
 
 	// greatdb
-	db := great.newGreatDBContainers(serviceName, cluster)
+	db := g.newGreatDBContainers(serviceName, cluster)
 
 	containers = append(containers, db)
 
 	// greatdb-agent
 	if *cluster.Spec.Backup.Enable {
-		backup := great.newGreatDBAgentContainers(serviceName, cluster)
+		backup := g.newGreatDBAgentContainers(serviceName, cluster)
 		containers = append(containers, backup)
 	}
 
 	//  Add exporter sidecar container
 	if cluster.Spec.LogCollection.Image != "" {
-		promtail := great.newPromtailContainers(serviceName, cluster)
+		promtail := g.newPromtailContainers(serviceName, cluster)
 		containers = append(containers, promtail)
 	}
 
@@ -421,10 +450,10 @@ func (great GreatDBManager) newContainers(serviceName string, cluster *v1alpha1.
 	return
 }
 
-func (great GreatDBManager) newGreatDBContainers(serviceName string, cluster *v1alpha1.GreatDBPaxos) (container corev1.Container) {
+func (g *GreatDBPaxosManager) newGreatDBContainers(serviceName string, cluster *v1.GreatDBPaxos) (container corev1.Container) {
 
-	env := great.newGreatDBEnv(serviceName, cluster)
-	envForm := great.newGreatDBEnvForm(cluster.Spec.SecretName)
+	env := g.newGreatDBEnv(serviceName, cluster)
+	envForm := g.newGreatDBEnvForm(cluster.Spec.SecretName)
 	imagePullPolicy := corev1.PullIfNotPresent
 	if cluster.Spec.ImagePullPolicy != "" {
 		imagePullPolicy = cluster.Spec.ImagePullPolicy
@@ -485,7 +514,7 @@ func (great GreatDBManager) newGreatDBContainers(serviceName string, cluster *v1
 	return
 }
 
-func (great GreatDBManager) newGreatDBEnv(serviceName string, cluster *v1alpha1.GreatDBPaxos) (env []corev1.EnvVar) {
+func (g *GreatDBPaxosManager) newGreatDBEnv(serviceName string, cluster *v1.GreatDBPaxos) (env []corev1.EnvVar) {
 
 	env = []corev1.EnvVar{
 		{
@@ -531,7 +560,7 @@ func (great GreatDBManager) newGreatDBEnv(serviceName string, cluster *v1alpha1.
 	return
 }
 
-func (great GreatDBManager) newGreatDBEnvForm(secretName string) (env []corev1.EnvFromSource) {
+func (g *GreatDBPaxosManager) newGreatDBEnvForm(secretName string) (env []corev1.EnvFromSource) {
 	env = []corev1.EnvFromSource{
 		{
 			SecretRef: &corev1.SecretEnvSource{
@@ -544,7 +573,7 @@ func (great GreatDBManager) newGreatDBEnvForm(secretName string) (env []corev1.E
 	return env
 }
 
-func (great GreatDBManager) newVolumes(configmapName, pvcName string, cluster *v1alpha1.GreatDBPaxos) (volumes []corev1.Volume) {
+func (g *GreatDBPaxosManager) newVolumes(configmapName, pvcName string, cluster *v1.GreatDBPaxos) (volumes []corev1.Volume) {
 
 	volumes = []corev1.Volume{}
 
@@ -592,10 +621,10 @@ func (great GreatDBManager) newVolumes(configmapName, pvcName string, cluster *v
 
 }
 
-func (great GreatDBManager) newGreatDBAgentContainers(serviceName string, cluster *v1alpha1.GreatDBPaxos) (container corev1.Container) {
+func (g *GreatDBPaxosManager) newGreatDBAgentContainers(serviceName string, cluster *v1.GreatDBPaxos) (container corev1.Container) {
 
-	env := great.newGreatAgentDBEnv(serviceName, cluster)
-	envForm := great.newGreatDBEnvForm(cluster.Spec.SecretName)
+	env := g.newGreatAgentDBEnv(serviceName, cluster)
+	envForm := g.newGreatDBEnvForm(cluster.Spec.SecretName)
 	imagePullPolicy := corev1.PullIfNotPresent
 	if cluster.Spec.ImagePullPolicy != "" {
 		imagePullPolicy = cluster.Spec.ImagePullPolicy
@@ -647,7 +676,7 @@ func (great GreatDBManager) newGreatDBAgentContainers(serviceName string, cluste
 	return
 }
 
-func (great GreatDBManager) newGreatAgentDBEnv(serviceName string, cluster *v1alpha1.GreatDBPaxos) (env []corev1.EnvVar) {
+func (g *GreatDBPaxosManager) newGreatAgentDBEnv(serviceName string, cluster *v1.GreatDBPaxos) (env []corev1.EnvVar) {
 
 	env = []corev1.EnvVar{
 		{
@@ -689,7 +718,7 @@ func (great GreatDBManager) newGreatAgentDBEnv(serviceName string, cluster *v1al
 	return
 }
 
-func (great GreatDBManager) newPromtailContainers(serviceName string, cluster *v1alpha1.GreatDBPaxos) (container corev1.Container) {
+func (g *GreatDBPaxosManager) newPromtailContainers(serviceName string, cluster *v1.GreatDBPaxos) (container corev1.Container) {
 	imagePullPolicy := corev1.PullIfNotPresent
 	if cluster.Spec.ImagePullPolicy != "" {
 		imagePullPolicy = cluster.Spec.ImagePullPolicy
@@ -700,8 +729,8 @@ func (great GreatDBManager) newPromtailContainers(serviceName string, cluster *v
 		dashboardUriStr := "http://%s:8080/log-monitor/loki/api/v1/push"
 		lokiClient = fmt.Sprintf(dashboardUriStr, svcName)
 	}
-	env := great.newGreatDBEnv(serviceName, cluster)
-	envForm := great.newGreatDBEnvForm(cluster.Spec.SecretName)
+	env := g.newGreatDBEnv(serviceName, cluster)
+	envForm := g.newGreatDBEnvForm(cluster.Spec.SecretName)
 	promtailEnv := []corev1.EnvVar{
 		{
 			Name:  "INSTANCE_INTERIOR_PORT",
@@ -747,15 +776,14 @@ func (great GreatDBManager) newPromtailContainers(serviceName string, cluster *v
 }
 
 // updateGreatDBStatefulSet  Update greatdb statefulset
-func (great GreatDBManager) updateGreatDBPod(cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) error {
+func (g *GreatDBPaxosManager) updateGreatDBPod(ctx context.Context, cluster *v1.GreatDBPaxos, podIns *corev1.Pod) error {
 
 	if !cluster.DeletionTimestamp.IsZero() {
 		if len(podIns.Finalizers) == 0 {
 			return nil
 		}
 		patch := `[{"op":"remove","path":"/metadata/finalizers"}]`
-		_, err := great.Client.KubeClientset.CoreV1().Pods(podIns.Namespace).Patch(
-			context.TODO(), podIns.Name, types.JSONPatchType, []byte(patch), metav1.PatchOptions{})
+		err := g.Client.Patch(ctx, podIns, client.RawPatch(types.JSONPatchType, []byte(patch)))
 		if err != nil {
 			dblog.Log.Errorf("failed to delete finalizers of pods  %s/%s,message: %s", podIns.Namespace, podIns.Name, err.Error())
 		}
@@ -765,12 +793,12 @@ func (great GreatDBManager) updateGreatDBPod(cluster *v1alpha1.GreatDBPaxos, pod
 	}
 	needUpdate := false
 	// update labels
-	if up := great.updateLabels(podIns, cluster); up {
+	if up := g.updateLabels(podIns, cluster); up {
 		needUpdate = true
 	}
 
 	// update annotations
-	if up := great.updateAnnotations(podIns, cluster); up {
+	if up := g.updateAnnotations(podIns, cluster); up {
 		needUpdate = true
 	}
 
@@ -810,7 +838,7 @@ func (great GreatDBManager) updateGreatDBPod(cluster *v1alpha1.GreatDBPaxos, pod
 
 	if needUpdate {
 
-		err := great.updatePod(podIns)
+		err := g.updatePod(ctx, podIns)
 		if err != nil {
 			return err
 		}
@@ -821,15 +849,17 @@ func (great GreatDBManager) updateGreatDBPod(cluster *v1alpha1.GreatDBPaxos, pod
 
 }
 
-func (great GreatDBManager) updatePod(pod *corev1.Pod) error {
+func (g *GreatDBPaxosManager) updatePod(ctx context.Context, pod *corev1.Pod) error {
 
 	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		_, err := great.Client.KubeClientset.CoreV1().Pods(pod.Namespace).Update(context.TODO(), pod, metav1.UpdateOptions{})
+		err := g.Client.Update(ctx, pod)
 		if err == nil {
 			return nil
 		}
-		upPod, err1 := great.Lister.PodLister.Pods(pod.Namespace).Get(pod.Name)
-		if err1 != nil {
+
+		upPod := &corev1.Pod{}
+		err = g.Client.Get(ctx, client.ObjectKeyFromObject(pod), upPod)
+		if err != nil {
 			dblog.Log.Reason(err).Errorf("failed to update pod %s/%s ", pod.Namespace, pod.Name)
 		} else {
 			if pod.ResourceVersion != upPod.ResourceVersion {
@@ -842,12 +872,12 @@ func (great GreatDBManager) updatePod(pod *corev1.Pod) error {
 	return err
 }
 
-func (great GreatDBManager) updateLabels(pod *corev1.Pod, cluster *v1alpha1.GreatDBPaxos) bool {
+func (g *GreatDBPaxosManager) updateLabels(pod *corev1.Pod, cluster *v1.GreatDBPaxos) bool {
 	needUpdate := false
 	if pod.Labels == nil {
 		pod.Labels = make(map[string]string)
 	}
-	labels := resourcemanager.MegerLabels(cluster.Spec.Labels, great.GetLabels(cluster.Name))
+	labels := resourcemanager.MergeLabels(cluster.Spec.Labels, g.GetLabels(cluster.Name))
 	for key, value := range labels {
 		if v, ok := pod.Labels[key]; !ok || v != value {
 			pod.Labels[key] = value
@@ -858,7 +888,7 @@ func (great GreatDBManager) updateLabels(pod *corev1.Pod, cluster *v1alpha1.Grea
 	return needUpdate
 }
 
-func (great GreatDBManager) updateAnnotations(pod *corev1.Pod, cluster *v1alpha1.GreatDBPaxos) bool {
+func (g *GreatDBPaxosManager) updateAnnotations(pod *corev1.Pod, cluster *v1.GreatDBPaxos) bool {
 	needUpdate := false
 	if pod.Annotations == nil {
 		pod.Annotations = make(map[string]string)
@@ -873,20 +903,20 @@ func (great GreatDBManager) updateAnnotations(pod *corev1.Pod, cluster *v1alpha1
 	return needUpdate
 }
 
-func (great GreatDBManager) UpdateGreatDBStatus(cluster *v1alpha1.GreatDBPaxos) error {
+func (g *GreatDBPaxosManager) UpdateGreatDBStatus(ctx context.Context, cluster *v1.GreatDBPaxos) error {
 	if !cluster.DeletionTimestamp.IsZero() {
 		return nil
 	}
 	var diag ClusterStatus
 	if cluster.Status.Phase.Stage() > 3 {
-		diag = great.probeStatusIfNeeded(cluster)
+		diag = g.probeStatusIfNeeded(ctx, cluster)
 	} else {
-		diag = great.ProbeStatus(cluster)
+		diag = g.ProbeStatus(ctx, cluster)
 	}
 
 	switch cluster.Status.Phase {
 
-	case v1alpha1.GreatDBPaxosDeployDB:
+	case v1.GreatDBPaxosDeployDB:
 
 		cluster.Status.Port = cluster.Spec.Port
 		cluster.Status.Instances = cluster.Spec.Instances
@@ -895,79 +925,79 @@ func (great GreatDBManager) UpdateGreatDBStatus(cluster *v1alpha1.GreatDBPaxos) 
 		if !diag.checkInstanceContainersIsReady() {
 			return nil
 		}
-		UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosBootCluster, "")
+		UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosBootCluster, "")
 		return nil
 
-	case v1alpha1.GreatDBPaxosBootCluster:
+	case v1.GreatDBPaxosBootCluster:
 
 		if err := diag.createCluster(cluster); err != nil {
 			return err
 		}
-		UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosInitUser, "")
+		UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosInitUser, "")
 		return nil
 
-	case v1alpha1.GreatDBPaxosInitUser:
+	case v1.GreatDBPaxosInitUser:
 		if err := diag.initUser(cluster); err != nil {
 			return err
 		}
-		UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosReady, "")
+		UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosReady, "")
 		return nil
 
-	case v1alpha1.GreatDBPaxosReady:
+	case v1.GreatDBPaxosReady:
 		// pause
-		if cluster.Spec.Pause.Enable && cluster.Spec.Pause.Mode == v1alpha1.ClusterPause {
+		if cluster.Spec.Pause.Enable && cluster.Spec.Pause.Mode == v1.ClusterPause {
 			msg := fmt.Sprintf("The cluster diagnosis status is %s", diag.status)
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosPause, msg)
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosPause, msg)
 			break
 		}
 
 		if cluster.Status.ReadyInstances == 0 {
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosRepair, "")
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosRepair, "")
 		}
 
-	case v1alpha1.GreatDBPaxosPause:
+	case v1.GreatDBPaxosPause:
 
-		if (cluster.Spec.Pause.Enable && cluster.Spec.Pause.Mode != v1alpha1.ClusterPause || !cluster.Spec.Pause.Enable) && cluster.Status.ReadyInstances > 0 {
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosReady, "")
+		if (cluster.Spec.Pause.Enable && cluster.Spec.Pause.Mode != v1.ClusterPause || !cluster.Spec.Pause.Enable) && cluster.Status.ReadyInstances > 0 {
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosReady, "")
 		}
 
-	case v1alpha1.GreatDBPaxosRestart:
+	case v1.GreatDBPaxosRestart:
 
 		if !cluster.Spec.Restart.Enable && cluster.Status.ReadyInstances == cluster.Status.Instances {
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosReady, "")
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosReady, "")
 		}
 
-	case v1alpha1.GreatDBPaxosUpgrade:
+	case v1.GreatDBPaxosUpgrade:
 		if len(cluster.Status.UpgradeMember.Upgrading) == 0 && cluster.Status.ReadyInstances == cluster.Status.Instances {
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosReady, "upgrade successful")
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosReady, "upgrade successful")
 		}
 
-	case v1alpha1.GreatDBPaxosRepair:
+	case v1.GreatDBPaxosRepair:
 		if cluster.Status.ReadyInstances < cluster.Spec.Instances {
 			diag.repairCluster(cluster)
 		}
 		if cluster.Status.ReadyInstances == cluster.Spec.Instances {
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosReady, "")
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosReady, "")
 		}
 
 		return nil
-	case v1alpha1.GreatDBPaxosScaleOut:
+	case v1.GreatDBPaxosScaleOut:
 		if cluster.Status.TargetInstances == cluster.Status.CurrentInstances && cluster.Status.ReadyInstances == cluster.Status.Instances {
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosReady, "")
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosReady, "")
 		}
-	case v1alpha1.GreatDBPaxosScaleIn:
+	case v1.GreatDBPaxosScaleIn:
 		if cluster.Status.TargetInstances == cluster.Status.CurrentInstances && cluster.Status.ReadyInstances == cluster.Status.Instances {
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosReady, "")
-		}
-
-	case v1alpha1.GreatDBPaxosFailover:
-		if cluster.Status.TargetInstances == cluster.Status.CurrentInstances && cluster.Status.ReadyInstances == cluster.Status.Instances {
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosFailoverSucceeded, "")
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosReady, "")
 		}
 
-	case v1alpha1.GreatDBPaxosFailoverSucceeded:
+	case v1.GreatDBPaxosFailover:
+		if cluster.Status.TargetInstances == cluster.Status.CurrentInstances && cluster.Status.ReadyInstances == cluster.Status.Instances {
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosFailoverSucceeded, "")
+		}
+
+	case v1.GreatDBPaxosFailoverSucceeded:
 		if cluster.Status.TargetInstances == cluster.Spec.Instances {
-			UpdateClusterStatusCondition(cluster, v1alpha1.GreatDBPaxosReady, "")
+			UpdateClusterStatusCondition(cluster, v1.GreatDBPaxosReady, "")
 			break
 		}
 		diag.repairCluster(cluster)

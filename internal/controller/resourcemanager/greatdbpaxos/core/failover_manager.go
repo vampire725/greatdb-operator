@@ -1,8 +1,13 @@
-package greatdbpaxos
+package core
 
 import (
+	"context"
 	"fmt"
 	"time"
+
+	policyV1 "k8s.io/api/policy/v1"
+	"k8s.io/api/policy/v1beta1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
 	"greatdb.com/greatdb-operator/internal/config"
@@ -13,26 +18,27 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-func (great GreatDBManager) failover(cluster *v1alpha1.GreatDBPaxos) error {
+func (g *GreatDBPaxosManager) failOver(ctx context.Context, cluster *v1alpha1.GreatDBPaxos) error {
 	// Fault prevention
-	if err := great.prevention(cluster); err != nil {
+	if err := g.prevention(ctx, cluster); err != nil {
 		return err
 	}
 
-	if err := great.faultRecovery(cluster); err != nil {
+	if err := g.faultRecovery(cluster); err != nil {
 		return err
 	}
 	return nil
 
 }
 
-func (great GreatDBManager) prevention(cluster *v1alpha1.GreatDBPaxos) error {
-	pdbName := great.getPDBName(cluster)
+func (g *GreatDBPaxosManager) prevention(ctx context.Context, cluster *v1alpha1.GreatDBPaxos) error {
+	pdbName := g.getPDBName(cluster)
 	if config.ApiVersion.PDB == "policy/v1" {
-		pdb, err := great.Lister.PDBV1Lister.PodDisruptionBudgets(cluster.Namespace).Get(pdbName)
+		var pdb = &policyV1.PodDisruptionBudget{}
+		err := g.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: pdbName}, pdb)
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
-				err := great.createV1PDB(cluster)
+				err := g.createV1PDB(ctx, cluster)
 				if err != nil {
 					return err
 				}
@@ -41,14 +47,15 @@ func (great GreatDBManager) prevention(cluster *v1alpha1.GreatDBPaxos) error {
 			log.Log.Reason(err).Errorf("failed to lister pdb %s/%s", cluster.Namespace, pdbName)
 		}
 		newPDB := pdb.DeepCopy()
-		return great.updateV1PDB(cluster, newPDB)
+		return g.updateV1PDB(ctx, cluster, newPDB)
 
 	} else {
 
-		pdb, err := great.Lister.PDBLister.PodDisruptionBudgets(cluster.Namespace).Get(pdbName)
+		var pdb = &v1beta1.PodDisruptionBudget{}
+		err := g.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: pdbName}, pdb)
 		if err != nil {
 			if k8serrors.IsNotFound(err) {
-				err := great.createPDB(cluster)
+				err := g.createPDB(ctx, cluster)
 				if err != nil {
 					return err
 				}
@@ -57,18 +64,18 @@ func (great GreatDBManager) prevention(cluster *v1alpha1.GreatDBPaxos) error {
 			log.Log.Reason(err).Errorf("failed to lister pdb %s/%s", cluster.Namespace, pdbName)
 		}
 		newPDB := pdb.DeepCopy()
-		return great.updatePDB(cluster, newPDB)
+		return g.updatePDB(ctx, cluster, newPDB)
 	}
 
 }
 
-func (great GreatDBManager) faultRecovery(cluster *v1alpha1.GreatDBPaxos) error {
+func (g *GreatDBPaxosManager) faultRecovery(cluster *v1alpha1.GreatDBPaxos) error {
 
 	if !*cluster.Spec.FailOver.Enable {
 		return nil
 	}
 
-	failedIns := great.stateTransition(cluster)
+	failedIns := g.stateTransition(cluster)
 
 	switch cluster.Status.Phase {
 	case v1alpha1.GreatDBPaxosReady:
@@ -120,9 +127,9 @@ func (great GreatDBManager) faultRecovery(cluster *v1alpha1.GreatDBPaxos) error 
 
 }
 
-// stateTransition  Check the instance status to determine whether the failover period has been reached
+// stateTransition  Check the instance status to determine whether the failOver period has been reached
 // Return the number of failed instances and normal instances
-func (great GreatDBManager) stateTransition(cluster *v1alpha1.GreatDBPaxos) (failedIns int32) {
+func (g *GreatDBPaxosManager) stateTransition(cluster *v1alpha1.GreatDBPaxos) (failedIns int32) {
 	period, err := tools.StringToDuration(cluster.Spec.FailOver.Period)
 	if err != nil {
 		period = time.Minute * 10
@@ -141,7 +148,7 @@ func (great GreatDBManager) stateTransition(cluster *v1alpha1.GreatDBPaxos) (fai
 				cluster.Status.Member[index].LastUpdateTime = now
 				cluster.Status.Member[index].LastTransitionTime = now
 				cluster.Status.Member[index].Type = v1alpha1.MemberStatusFailure
-				cluster.Status.Member[index].Message = fmt.Sprintf("The instance is in state %s for more than the failover period %s", mem.Type, cluster.Spec.FailOver.Period)
+				cluster.Status.Member[index].Message = fmt.Sprintf("The instance is in state %s for more than the failOver period %s", mem.Type, cluster.Spec.FailOver.Period)
 				failedIns++
 			}
 

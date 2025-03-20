@@ -1,17 +1,18 @@
-package greatdbpaxos
+package core
 
 import (
-	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
-	resources "greatdb.com/greatdb-operator/internal/controller/resourcemanager"
-
+	"context"
 	"strings"
 	"time"
+
+	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
+	resources "greatdb.com/greatdb-operator/internal/controller/resourcemanager"
 
 	corev1 "k8s.io/api/core/v1"
 )
 
 // pauseGreatdb Whether to pause the return instance
-func (great GreatDBManager) upgradeGreatDB(cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) error {
+func (g *GreatDBPaxosManager) upgradeGreatDB(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) error {
 	if cluster.Status.Phase != v1alpha1.GreatDBPaxosReady && cluster.Status.Phase != v1alpha1.GreatDBPaxosUpgrade {
 		return nil
 	}
@@ -21,13 +22,13 @@ func (great GreatDBManager) upgradeGreatDB(cluster *v1alpha1.GreatDBPaxos, podIn
 	}
 
 	if cluster.Status.UpgradeMember.Upgrading == nil {
-		cluster.Status.UpgradeMember.Upgrading = make(map[string]string, 0)
+		cluster.Status.UpgradeMember.Upgrading = make(map[string]string)
 	}
 	if cluster.Status.UpgradeMember.Upgraded == nil {
-		cluster.Status.UpgradeMember.Upgraded = make(map[string]string, 0)
+		cluster.Status.UpgradeMember.Upgraded = make(map[string]string)
 	}
 
-	err := great.upgradeInstance(cluster, podIns)
+	err := g.upgradeInstance(ctx, cluster, podIns)
 	if err != nil {
 		return err
 	}
@@ -40,7 +41,7 @@ func (great GreatDBManager) upgradeGreatDB(cluster *v1alpha1.GreatDBPaxos, podIn
 }
 
 // Pause successfully returns true
-func (great GreatDBManager) upgradeInstance(cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) error {
+func (g *GreatDBPaxosManager) upgradeInstance(ctx context.Context, cluster *v1alpha1.GreatDBPaxos, podIns *corev1.Pod) error {
 
 	needUpgrade := false
 
@@ -89,7 +90,7 @@ func (great GreatDBManager) upgradeInstance(cluster *v1alpha1.GreatDBPaxos, podI
 		cluster.Status.UpgradeMember.Upgraded[podIns.Name] = resources.GetNowTimeToString()
 	}
 
-	if great.upgradeClusterEnds(cluster) {
+	if g.upgradeClusterEnds(cluster) {
 		cluster.Status.UpgradeMember.Upgraded = make(map[string]string, 0)
 		cluster.Status.UpgradeMember.Upgrading = make(map[string]string, 0)
 		return nil
@@ -106,7 +107,7 @@ func (great GreatDBManager) upgradeInstance(cluster *v1alpha1.GreatDBPaxos, podI
 	// Restart according to strategy
 	switch cluster.Spec.UpgradeStrategy {
 	case v1alpha1.AllUpgrade:
-		err := great.updatePod(podIns)
+		err := g.updatePod(ctx, podIns)
 		if err != nil {
 			return err
 		}
@@ -120,7 +121,7 @@ func (great GreatDBManager) upgradeInstance(cluster *v1alpha1.GreatDBPaxos, podI
 			}
 
 		}
-		diag := great.ProbeStatus(cluster)
+		diag := g.ProbeStatus(ctx, cluster)
 		memberList := diag.OnlineMembers
 		canUpgrade := false
 		secondaryAllUpgrade := true
@@ -151,7 +152,7 @@ func (great GreatDBManager) upgradeInstance(cluster *v1alpha1.GreatDBPaxos, podI
 			return nil
 		}
 
-		err := great.updatePod(podIns)
+		err := g.updatePod(ctx, podIns)
 		if err != nil {
 			return err
 		}
@@ -163,7 +164,7 @@ func (great GreatDBManager) upgradeInstance(cluster *v1alpha1.GreatDBPaxos, podI
 
 }
 
-func (GreatDBManager) upgradeClusterEnds(cluster *v1alpha1.GreatDBPaxos) bool {
+func (*GreatDBPaxosManager) upgradeClusterEnds(cluster *v1alpha1.GreatDBPaxos) bool {
 	end := true
 	for _, member := range cluster.Status.Member {
 		if member.Type == v1alpha1.MemberStatusPause {

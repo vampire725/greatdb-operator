@@ -11,7 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
-	"greatdb-operator/pkg/apis/greatdb/v1alpha1"
+	v1 "greatdb.com/greatdb-operator/api/v1"
 )
 
 const (
@@ -21,8 +21,8 @@ const (
 func GetGreatDBClusterOwnerReferences(name string, uuid types.UID) metav1.OwnerReference {
 	isTrue := true
 	return metav1.OwnerReference{
-		APIVersion:         v1alpha1.SchemeGroupVersion.WithKind("GreatDBPaxos").GroupVersion().String(),
-		Kind:               v1alpha1.SchemeGroupVersion.WithKind("GreatDBPaxos").Kind,
+		APIVersion:         v1.GroupVersion.WithKind("GreatDBPaxos").GroupVersion().String(),
+		Kind:               v1.GroupVersion.WithKind("GreatDBPaxos").Kind,
 		Name:               name,
 		UID:                uuid,
 		Controller:         &isTrue,
@@ -33,8 +33,8 @@ func GetGreatDBClusterOwnerReferences(name string, uuid types.UID) metav1.OwnerR
 func GetGreatDBBackupSchedulerOwnerReferences(name string, uuid types.UID) metav1.OwnerReference {
 	isTrue := true
 	return metav1.OwnerReference{
-		APIVersion:         v1alpha1.SchemeGroupVersion.WithKind("GreatDBBackupSchedule").GroupVersion().String(),
-		Kind:               v1alpha1.SchemeGroupVersion.WithKind("GreatDBBackupSchedule").Kind,
+		APIVersion:         v1.GroupVersion.WithKind("GreatDBBackupSchedule").GroupVersion().String(),
+		Kind:               v1.GroupVersion.WithKind("GreatDBBackupSchedule").Kind,
 		Name:               name,
 		UID:                uuid,
 		Controller:         &isTrue,
@@ -45,8 +45,8 @@ func GetGreatDBBackupSchedulerOwnerReferences(name string, uuid types.UID) metav
 func GetGreatDBBackupRecordOwnerReferences(name string, uuid types.UID) metav1.OwnerReference {
 	isTrue := true
 	return metav1.OwnerReference{
-		APIVersion:         v1alpha1.SchemeGroupVersion.WithKind("GreatDBBackupRecord").GroupVersion().String(),
-		Kind:               v1alpha1.SchemeGroupVersion.WithKind("GreatDBBackupRecord").Kind,
+		APIVersion:         v1.GroupVersion.WithKind("GreatDBBackupRecord").GroupVersion().String(),
+		Kind:               v1.GroupVersion.WithKind("GreatDBBackupRecord").Kind,
 		Name:               name,
 		UID:                uuid,
 		Controller:         &isTrue,
@@ -54,15 +54,15 @@ func GetGreatDBBackupRecordOwnerReferences(name string, uuid types.UID) metav1.O
 	}
 }
 
-func MegerLabels(args ...map[string]string) map[string]string {
-	return MegerMap(args...)
+func MergeLabels(args ...map[string]string) map[string]string {
+	return MergeMap(args...)
 }
 
-func MegerAnnotation(args ...map[string]string) map[string]string {
-	return MegerMap(args...)
+func MergeAnnotation(args ...map[string]string) map[string]string {
+	return MergeMap(args...)
 }
 
-func MegerMap(args ...map[string]string) map[string]string {
+func MergeMap(args ...map[string]string) map[string]string {
 	labels := make(map[string]string)
 	for _, arg := range args {
 		if arg == nil {
@@ -92,7 +92,7 @@ func Get16MD5Encode(data string) string {
 }
 
 // GetClusterUser  Return cluster user and password
-func GetClusterUser(cluster *v1alpha1.GreatDBPaxos) (string, string) {
+func GetClusterUser(cluster *v1.GreatDBPaxos) (string, string) {
 
 	name := cluster.Status.CloneSource.ClusterName
 	if name == "" {

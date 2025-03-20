@@ -1,4 +1,4 @@
-package greatdbpaxos
+package core
 
 import (
 	"fmt"
@@ -141,7 +141,7 @@ func StringToTime(value string) time.Time {
 	return n
 }
 
-func CountGtids(gtidSet string) int {
+func CountGtidList(gtidSet string) int {
 	// Return number of transactions in the GTID set
 	countRange := func(r string) int {
 		parts := strings.Split(r, "-")

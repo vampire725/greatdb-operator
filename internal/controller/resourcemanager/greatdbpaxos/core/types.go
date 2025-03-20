@@ -1,4 +1,4 @@
-package greatdbpaxos
+package core
 
 // sql
 const (

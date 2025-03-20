@@ -1,25 +1,30 @@
-package greatdbpaxos
+package core
 
 import (
-	v1alpha1 "greatdb.com/greatdb-operator/api/v1"
+	"context"
+
+	corev1 "k8s.io/api/core/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"greatdb.com/greatdb-operator/api/v1"
 	dblog "greatdb.com/greatdb-operator/internal/utils/log"
 
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 )
 
 // pauseGreatdb Whether to pause the return instance
-func (great GreatDBManager) deleteGreatDB(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (bool, error) {
+func (g *GreatDBPaxosManager) deleteGreatDB(ctx context.Context, cluster *v1.GreatDBPaxos, member v1.MemberCondition) (bool, error) {
 
 	if cluster.Spec.Delete == nil {
-		cluster.Spec.Delete = &v1alpha1.DeleteInstance{}
+		cluster.Spec.Delete = &v1.DeleteInstance{}
 	}
 
-	return great.deleteInstance(cluster, member)
+	return g.deleteInstance(ctx, cluster, member)
 
 }
 
 // Pause successfully returns true
-func (great GreatDBManager) deleteInstance(cluster *v1alpha1.GreatDBPaxos, member v1alpha1.MemberCondition) (bool, error) {
+func (g *GreatDBPaxosManager) deleteInstance(ctx context.Context, cluster *v1.GreatDBPaxos, member v1.MemberCondition) (bool, error) {
 
 	needDel := false
 	for _, insName := range cluster.Spec.Delete.Instances {
@@ -32,8 +37,8 @@ func (great GreatDBManager) deleteInstance(cluster *v1alpha1.GreatDBPaxos, membe
 	if !needDel {
 		return false, nil
 	}
-
-	pod, err := great.Lister.PodLister.Pods(cluster.Namespace).Get(member.Name)
+	var pod = &corev1.Pod{}
+	err := g.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: member.Name}, pod)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return false, err
@@ -43,19 +48,20 @@ func (great GreatDBManager) deleteInstance(cluster *v1alpha1.GreatDBPaxos, membe
 		dblog.Log.Reason(err).Error("failed to lister pod")
 	}
 
-	err = great.deletePod(pod)
+	err = g.deletePod(ctx, pod)
 	if err != nil {
 		return false, err
 	}
 
 	if cluster.Spec.Delete.CleanPvc {
-		pvc, err := great.Lister.PvcLister.PersistentVolumeClaims(cluster.Namespace).Get(member.PvcName)
+		var pvc = &corev1.PersistentVolumeClaim{}
+		err = g.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: member.PvcName}, pvc)
 		if err != nil {
 			if !k8serrors.IsNotFound(err) {
 				return false, err
 			}
 		} else {
-			err = great.Deletepvc(pvc)
+			err = g.Deletepvc(ctx, pvc)
 			if err != nil {
 				return false, err
 			}
@@ -64,14 +70,14 @@ func (great GreatDBManager) deleteInstance(cluster *v1alpha1.GreatDBPaxos, membe
 	}
 
 	// remove
-	great.removeMember(cluster, member.Name)
+	g.removeMember(cluster, member.Name)
 
 	return true, nil
 
 }
 
-func (GreatDBManager) removeMember(cluster *v1alpha1.GreatDBPaxos, name string) {
-	memberList := make([]v1alpha1.MemberCondition, 0)
+func (_ *GreatDBPaxosManager) removeMember(cluster *v1.GreatDBPaxos, name string) {
+	memberList := make([]v1.MemberCondition, 0)
 
 	for _, member := range cluster.Status.Member {
 		if member.Name == name {

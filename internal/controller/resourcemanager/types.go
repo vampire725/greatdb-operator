@@ -1,7 +1,7 @@
 package resourcemanager
 
 import (
-	"greatdb-operator/pkg/config"
+	"greatdb.com/greatdb-operator/internal/config"
 )
 
 // Resource synchronization logical interface
