@@ -27,6 +27,8 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - persistentvolumeclaims
+  - persistentvolumes
   - pods
   verbs:
   - create

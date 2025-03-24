@@ -30,11 +30,10 @@ type Manager struct {
 }
 
 func (r *Manager) Sync(ctx context.Context, cluster *greatdbv1.GreatDBPaxos) (err error) {
-	ns, secretName := cluster.Namespace, cluster.Spec.SecretName
 	// If the user has set the secretName, you need to check whether the secret really exists. If it does not exist, the operator should create it
-	secret, err := r.GetSecret(ctx, ns, secretName)
+	secret, err := r.GetSecret(ctx, cluster.Namespace, cluster.Spec.SecretName)
 
-	if err != nil {
+	if err != nil && !k8serrors.IsNotFound(err) {
 		return err
 	}
 
@@ -50,7 +49,7 @@ func (r *Manager) Sync(ctx context.Context, cluster *greatdbv1.GreatDBPaxos) (er
 	if err = r.CreateSecret(ctx, cluster); err != nil {
 		return err
 	}
-	if err = r.UpdateClusterSecretName(ctx, cluster, secretName); err != nil {
+	if err = r.UpdateClusterSecretName(ctx, cluster, cluster.Spec.SecretName); err != nil {
 		return err
 	}
 

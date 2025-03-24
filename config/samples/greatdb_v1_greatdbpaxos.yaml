@@ -4,7 +4,7 @@ metadata:
   labels:
     app.kubernetes.io/name: greatdb-operator
     app.kubernetes.io/managed-by: kustomize
-  name: greatdbpaxos-sample
+  name: greatdbpaxos-sample-p
 spec:
 #  backup:
 #    enable: true
@@ -30,6 +30,10 @@ spec:
   imagePullPolicy: IfNotPresent
   instances: 3
   maintenanceMode: false
+  users:
+    - name: greatdb
+      password: greatdb
+      perm: GRANT ALL ON *.* TO greatdb@'%' WITH GRANT OPTION
   pause:
     mode: ins
   podSecurityContext:

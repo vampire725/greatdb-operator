@@ -68,7 +68,7 @@ func (svc *Manager) SyncGreatDBReadService(ctx context.Context, cluster *greatdb
 			if !cluster.DeletionTimestamp.IsZero() {
 				return nil
 			}
-			if err := svc.createGreatDBReadOrWriteService(ctx, cluster, GreatDBServiceRead); err != nil {
+			if err = svc.createGreatDBReadOrWriteService(ctx, cluster, GreatDBServiceRead); err != nil {
 				return err
 			}
 			return nil
@@ -96,7 +96,7 @@ func (svc *Manager) SyncGreatDBWriteService(ctx context.Context, cluster *greatd
 			if !cluster.DeletionTimestamp.IsZero() {
 				return nil
 			}
-			if err := svc.createGreatDBReadOrWriteService(ctx, cluster, GreatDBServiceWrite); err != nil {
+			if err = svc.createGreatDBReadOrWriteService(ctx, cluster, GreatDBServiceWrite); err != nil {
 				return err
 			}
 			return nil
@@ -266,9 +266,11 @@ func (svc *Manager) updateGreatDBReadOrWriteService(ctx context.Context, service
 			service.Spec.Type = cluster.Spec.Service.Type
 			needUpdate = true
 		}
+
 		if greatdbSvcType == GreatDBServiceRead {
 			nport = cluster.Spec.Service.ReadPort
 		}
+
 		if greatdbSvcType == GreatDBServiceWrite {
 			nport = cluster.Spec.Service.WritePort
 		}
@@ -282,6 +284,7 @@ func (svc *Manager) updateGreatDBReadOrWriteService(ctx context.Context, service
 		})
 
 	}
+
 	if svc.updateServicePort(service, ports) {
 		needUpdate = true
 	}

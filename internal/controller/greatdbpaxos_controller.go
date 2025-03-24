@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 
 	corev1 "k8s.io/api/core/v1"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
@@ -50,6 +52,8 @@ type GreatDBPaxosReconciler struct {
 //+kubebuilder:rbac:groups=core,resources=secrets,verbs=get;list;watch;create;update;delete
 //+kubebuilder:rbac:groups=core,resources=service,verbs=get;list;watch;create;update;delete
 //+kubebuilder:rbac:groups=core,resources=pods,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core,resources=persistentvolumes,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=core,resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 
 // +kubebuilder:rbac:groups=greatdb.greatdb.com,resources=greatdbpaxos,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=greatdb.greatdb.com,resources=greatdbpaxos/status,verbs=get;update;patch
@@ -76,6 +80,10 @@ func (r *GreatDBPaxosReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			return ctrl.Result{}, nil
 		}
 
+		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if err := r.startForegroundDeletion(ctx, cluster); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -88,8 +96,10 @@ func (r *GreatDBPaxosReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// 3. 设置默认值
 	newCluster := cluster.DeepCopy()
 	if setDefault(newCluster) {
-		if err := r.Update(ctx, newCluster); err != nil {
-			return ctrl.Result{}, err
+		err := r.updateGreatDBCluster(ctx, newCluster)
+		if err != nil {
+			dblog.Log.Errorf("update cluster err %s", err.Error())
+			return ctrl.Result{Requeue: false}, nil
 		}
 
 		dblog.Log.Info("Updated cluster defaults")
@@ -97,11 +107,14 @@ func (r *GreatDBPaxosReconciler) Reconcile(ctx context.Context, req ctrl.Request
 
 	// 4. 同步资源（Secret/Service/ConfigMap 等）
 	if err := r.syncClusterResources(ctx, newCluster); err != nil {
-		return ctrl.Result{}, err
+		dblog.Log.Errorf("sync cluster err %s", err.Error())
+		return ctrl.Result{Requeue: false}, err
 	}
 
-	if err := r.Update(ctx, newCluster); err != nil {
-		return ctrl.Result{}, err
+	if err := r.updateGreatDBCluster(ctx, newCluster); err != nil {
+		dblog.Log.Errorf("update cluster err %s", err.Error())
+
+		return ctrl.Result{Requeue: false}, nil
 	}
 
 	dblog.Log.Info("Updated cluster spec")
@@ -119,10 +132,50 @@ func (r *GreatDBPaxosReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	return ctrl.Result{}, nil
 }
 
+func (r *GreatDBPaxosReconciler) updateGreatDBCluster(ctx context.Context, cluster *greatdbv1.GreatDBPaxos) error {
+
+	// 创建 cluster 的深拷贝用于比较
+	originalCluster := cluster.DeepCopy()
+
+	// 使用 controller-runtime 的 Update 方法重试更新
+	err := retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		// 尝试更新 cluster
+		if err := r.Client.Update(ctx, cluster); err != nil {
+			if !apierrors.IsConflict(err) {
+				return err
+			}
+
+			// 处理冲突时获取最新版本
+			latestCluster := &greatdbv1.GreatDBPaxos{}
+			if err = r.Client.Get(ctx, client.ObjectKey{Namespace: cluster.Namespace, Name: cluster.Name}, latestCluster); err != nil {
+				dblog.Log.Errorf("failed to get latest greatdb-cluster %s/%s: %v", cluster.Namespace, cluster.Name, err)
+				return err
+			}
+
+			// 合并元数据，保持原有逻辑
+			cluster = latestCluster.DeepCopy()
+			cluster.Labels = resources.MergeLabels(cluster.Labels, originalCluster.Labels)
+			cluster.Annotations = resources.MergeAnnotation(cluster.Annotations, originalCluster.Annotations)
+			cluster.Finalizers = originalCluster.Finalizers
+
+			return fmt.Errorf("conflict occurred, retrying")
+		}
+		return nil
+	})
+
+	if err != nil {
+		dblog.Log.Reason(err).Errorf("failed to update cluster %s/%s",
+			cluster.Namespace, cluster.Name)
+		return err
+	}
+
+	return nil
+}
+
 // updateCluster Synchronize the cluster state to the desired state
 func (r *GreatDBPaxosReconciler) syncClusterResources(ctx context.Context, cluster *greatdbv1.GreatDBPaxos) (err error) {
 
-	managers := core.NewGreatDBPaxosResourceManagers(r.Client, r.Recorder)
+	managers := core.NewGreatDBPaxosResourceManagers(r.Client, r.Recorder, r.Scheme)
 	// synchronize cluster secret
 	if err = managers.SecretManager.Sync(ctx, cluster); err != nil {
 		dblog.Log.Errorf("Failed to synchronize secret, message: %s ", err.Error())
@@ -558,5 +611,9 @@ func (r *GreatDBPaxosReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&greatdbv1.GreatDBPaxos{}).
 		Named("greatdbpaxos").
 		WithOptions(controller.Options{MaxConcurrentReconciles: 3}).
+		Owns(&corev1.Pod{}).
+		Owns(&corev1.Service{}).
+		Owns(&corev1.ConfigMap{}).
+		Owns(&corev1.Secret{}).
 		Complete(r)
 }

@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"time"
 
+	"k8s.io/apimachinery/pkg/runtime"
+
 	"greatdb.com/greatdb-operator/api/v1"
 	"greatdb.com/greatdb-operator/internal/config"
 	"greatdb.com/greatdb-operator/internal/controller/resourcemanager"
@@ -43,8 +45,8 @@ type GreatDBPaxosResourceManagers struct {
 	DashboardManager    Manager
 }
 
-func NewGreatDBPaxosResourceManagers(client client.Client, recorder record.EventRecorder) *GreatDBPaxosResourceManagers {
-	configmapManager := &configmap.Manager{Client: client, Recorder: recorder}
+func NewGreatDBPaxosResourceManagers(client client.Client, recorder record.EventRecorder, scheme *runtime.Scheme) *GreatDBPaxosResourceManagers {
+	configmapManager := &configmap.Manager{Client: client, Recorder: recorder, Scheme: scheme}
 	serviceManager := &service.Manager{Client: client, Recorder: recorder}
 	secretmanager := &secret.Manager{Client: client, Recorder: recorder}
 	dashboardManager := &DashboardManager{Client: client, Recorder: recorder}
@@ -186,7 +188,7 @@ func (g *GreatDBPaxosManager) CreateOrUpdateInstance(ctx context.Context, cluste
 
 	if cluster.DeletionTimestamp.IsZero() {
 		// restart
-		if err := g.restartGreatDB(ctx, cluster, newPod); err != nil {
+		if err = g.restartGreatDB(ctx, cluster, newPod); err != nil {
 			return err
 		}
 

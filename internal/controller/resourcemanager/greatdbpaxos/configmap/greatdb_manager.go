@@ -8,6 +8,9 @@ import (
 	"strconv"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+
 	"greatdb.com/greatdb-operator/internal/controller/resourcemanager"
 	"greatdb.com/greatdb-operator/internal/controller/resourcemanager/internal"
 	internalConfig "greatdb.com/greatdb-operator/internal/controller/resourcemanager/internal/config"
@@ -31,13 +34,15 @@ import (
 type GreatdbConfigManager struct {
 	client   client.Client
 	recorder record.EventRecorder
+	scheme   *runtime.Scheme
 }
 
-func NewGreatdbConfigManager(client client.Client, recorder record.EventRecorder) *GreatdbConfigManager {
+func NewGreatdbConfigManager(client client.Client, recorder record.EventRecorder, scheme *runtime.Scheme) *GreatdbConfigManager {
 
 	return &GreatdbConfigManager{
 		client:   client,
 		recorder: recorder,
+		scheme:   scheme,
 	}
 
 }
@@ -50,8 +55,11 @@ func (greatdb *GreatdbConfigManager) Sync(ctx context.Context, cluster *greatdbv
 	configmapName := clusterName + resourcemanager.ComponentGreatDBSuffix
 	// 使用 Controller Runtime 的 Client 直接操作 ConfigMap
 	var configMap = &corev1.ConfigMap{}
-	err := greatdb.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: configmapName}, configMap)
+	if err := controllerutil.SetControllerReference(cluster, configMap, greatdb.scheme); err == nil {
+		return err
+	}
 
+	err := greatdb.client.Get(ctx, client.ObjectKey{Namespace: ns, Name: configmapName}, configMap)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			if err = greatdb.createGreatdbConfigmap(ctx, cluster); err != nil {
@@ -78,6 +86,10 @@ func (greatdb *GreatdbConfigManager) createGreatdbConfigmap(ctx context.Context,
 		return nil
 	}
 	configmap := greatdb.NewGreatdbConfigMap(cluster)
+	if err := controllerutil.SetControllerReference(cluster, configmap, greatdb.scheme); err != nil {
+		return err
+	}
+
 	err := greatdb.client.Create(ctx, configmap)
 	if err != nil {
 		if k8serrors.IsAlreadyExists(err) {
@@ -257,9 +269,9 @@ func (greatdb *GreatdbConfigManager) updateConfigmapMeta(configmap *corev1.Confi
 	}
 
 	// update OwnerReferences
-	if greatdb.updateOwnerReferences(configmap, cluster) {
-		needUpdate = true
-	}
+	//if greatdb.updateOwnerReferences(configmap, cluster) {
+	//	needUpdate = true
+	//}
 
 	return needUpdate
 }
