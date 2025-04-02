@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"reflect"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -99,7 +100,7 @@ func (r *GreatDBPaxosReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		err := r.updateGreatDBCluster(ctx, newCluster)
 		if err != nil {
 			dblog.Log.Errorf("update cluster err %s", err.Error())
-			return ctrl.Result{Requeue: false}, nil
+			return ctrl.Result{}, nil
 		}
 
 		dblog.Log.Info("Updated cluster defaults")
@@ -108,13 +109,15 @@ func (r *GreatDBPaxosReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// 4. 同步资源（Secret/Service/ConfigMap 等）
 	if err := r.syncClusterResources(ctx, newCluster); err != nil {
 		dblog.Log.Errorf("sync cluster err %s", err.Error())
-		return ctrl.Result{Requeue: false}, err
+		return ctrl.Result{RequeueAfter: time.Minute * 1}, nil
 	}
 
-	if err := r.updateGreatDBCluster(ctx, newCluster); err != nil {
-		dblog.Log.Errorf("update cluster err %s", err.Error())
+	if !reflect.DeepEqual(cluster, newCluster) {
+		if err := r.updateGreatDBCluster(ctx, newCluster); err != nil {
+			dblog.Log.Errorf("update cluster err %s", err.Error())
 
-		return ctrl.Result{Requeue: false}, nil
+			return ctrl.Result{}, nil
+		}
 	}
 
 	dblog.Log.Info("Updated cluster spec")
@@ -466,8 +469,10 @@ func SetSecurityContext(cluster *greatdbv1.GreatDBPaxos) bool {
 
 	// runAsUser
 	if cluster.Spec.PodSecurityContext.RunAsGroup == nil {
-		cluster.Spec.PodSecurityContext.RunAsUser = &runAsUser
-		update = true
+		if cluster.Spec.PodSecurityContext.RunAsUser == nil || *cluster.Spec.PodSecurityContext.RunAsUser != runAsUser {
+			cluster.Spec.PodSecurityContext.RunAsUser = &runAsUser
+			update = true
+		}
 	}
 
 	return update

@@ -18,6 +18,8 @@ spec:
 #      requests:
 #        cpu: "1"
 #        memory: 1Gi
+  imagePullSecrets:
+    - name: harbor
   clusterDomain: cluster.local
   delete: {}
   failOver:
